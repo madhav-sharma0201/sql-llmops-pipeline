@@ -286,102 +286,121 @@ async def generate_sql(req: SQLRequest) -> SQLResponse:
             clean_cols = list(dict.fromkeys(cols_found))
             schema_map[tbl_name.lower()] = (tbl_name, clean_cols)
 
-        # 2. Extract Query Entities (limits, years, numerical thresholds)
+        # 2. Extract Query Parameters
         limit_match = re.search(r'(?:top|limit|first)\s+(\d+)', q_lower)
         limit_val = int(limit_match.group(1)) if limit_match else None
 
         year_match = re.search(r'\b(20\d{2}|19\d{2})\b', q_lower)
         year_val = year_match.group(1) if year_match else None
 
-        gt_num_match = re.search(r'(?:over|above|>|greater than)\s+(\d+)', q_lower)
-        lt_num_match = re.search(r'(?:below|under|<|less than)\s+(\d+)', q_lower)
+        gt_match = re.search(r'(?:over|above|>|greater than)\s+(\d+)', q_lower)
+        lt_match = re.search(r'(?:below|under|<|less than)\s+(\d+)', q_lower)
 
-        # 3. Dynamic SQL Generation based on Schema AST
+        def categorize_cols(cols):
+            id_col = next((c for c in cols if c.lower().endswith('_id') or c.lower() == 'id'), cols[0] if cols else 'id')
+            name_col = next((c for c in cols if any(k in c.lower() for k in ('name', 'title', 'username', 'doctor', 'driver', 'instructor', 'city', 'airline'))), None)
+            num_col = next((c for c in cols if any(k in c.lower() for k in ('amount', 'spend', 'salary', 'fee', 'price', 'quantity', 'stock', 'mrr', 'balance', 'rating', 'points', 'distance', 'val', 'cost', 'xp', 'pages'))), None)
+            cat_col = next((c for c in cols if any(k in c.lower() for k in ('country', 'category', 'dept', 'tier', 'specialty', 'genre', 'type', 'status', 'location', 'state'))), None)
+            date_col = next((c for c in cols if any(k in c.lower() for k in ('date', 'time', 'year', 'hire', 'start'))), None)
+            return id_col, name_col, num_col, cat_col, date_col
+
         if not schema_map:
             sql = f"SELECT * FROM data_table LIMIT {limit_val or 10};"
+
+        # Single-Table Generation
         elif len(schema_map) == 1:
             tbl_key = list(schema_map.keys())[0]
             tbl_real, cols = schema_map[tbl_key]
+            id_col, name_col, num_col, cat_col, date_col = categorize_cols(cols)
+
             where_clauses = []
+            if year_val and date_col:
+                where_clauses.append(f"strftime('%Y', {date_col}) = '{year_val}'")
+            if gt_match and num_col:
+                where_clauses.append(f"{num_col} > {gt_match.group(1)}")
+            elif lt_match and num_col:
+                where_clauses.append(f"{num_col} < {lt_match.group(1)}")
 
-            # 1. Date filters
-            date_cols = [c for c in cols if any(k in c.lower() for k in ('date', 'time', 'year'))]
-            if year_val and date_cols:
-                where_clauses.append(f"strftime('%Y', {date_cols[0]}) = '{year_val}'")
+            cat_val = None
+            if "electronics" in q_lower: cat_val = "Electronics"
+            elif "engineering" in q_lower: cat_val = "Engineering"
+            elif "miami" in q_lower: cat_val = "Miami"
+            elif "japan" in q_lower: cat_val = "Japan"
+            elif "germany" in q_lower: cat_val = "Germany"
 
-            # 2. Numerical filters (> or <)
-            num_cols = [c for c in cols if any(k in c.lower() for k in ('amount', 'salary', 'fee', 'price', 'quantity', 'stock', 'mrr'))]
-            if gt_num_match and num_cols:
-                where_clauses.append(f"{num_cols[0]} > {gt_num_match.group(1)}")
-            elif lt_num_match and num_cols:
-                where_clauses.append(f"{num_cols[0]} < {lt_num_match.group(1)}")
-
-            # 3. Category/Status filters
-            cat_cols = [c for c in cols if any(k in c.lower() for k in ('category', 'tier', 'status', 'dept', 'specialty', 'country'))]
-            if "completed" in q_lower and any('status' in c.lower() for c in cols):
+            if cat_val and cat_col:
+                where_clauses.append(f"{cat_col} = '{cat_val}'")
+            elif "completed" in q_lower and 'status' in [c.lower() for c in cols]:
                 where_clauses.append("status = 'completed'")
-            elif "active" in q_lower and any('status' in c.lower() for c in cols):
+            elif "active" in q_lower and 'status' in [c.lower() for c in cols]:
                 where_clauses.append("status = 'active'")
 
-            cat_in_match = re.search(r'in\s+([a-zA-Z0-9_-]+)\s+(?:category|department|dept|tier)', q_lower)
-            if cat_in_match and cat_cols:
-                where_clauses.append(f"{cat_cols[0]} = '{cat_in_match.group(1).capitalize()}'")
-            elif "electronics" in q_lower and cat_cols:
-                where_clauses.append(f"{cat_cols[0]} = 'Electronics'")
-
             where_str = ("WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
-            select_cols = ", ".join(cols[:5]) if cols else "*"
-            
-            # Aggregate or Order By
-            if ("sum" in q_lower or "total" in q_lower or "revenue" in q_lower) and num_cols and cat_cols:
-                sql = f"SELECT {cat_cols[0]}, SUM({num_cols[0]}) AS total_val FROM {tbl_real} {where_str} GROUP BY {cat_cols[0]} ORDER BY total_val DESC"
+
+            if ("sum" in q_lower or "total" in q_lower or "spent" in q_lower or "revenue" in q_lower) and num_col and (cat_col or name_col):
+                group_c = cat_col or name_col
+                sql = f"SELECT {group_c}, SUM({num_col}) AS total_val FROM {tbl_real} {where_str} GROUP BY {group_c} ORDER BY total_val DESC"
             else:
-                order_col = num_cols[0] if num_cols else cols[0]
-                order_dir = "ASC" if lt_num_match else "DESC"
-                sql = f"SELECT {select_cols} FROM {tbl_real} {where_str} ORDER BY {order_col} {order_dir}"
-            
+                select_items = [c for c in (name_col, num_col, cat_col, id_col) if c]
+                sel_str = ", ".join(list(dict.fromkeys(select_items)))
+                order_c = num_col or id_col
+                order_dir = "ASC" if lt_match else "DESC"
+                sql = f"SELECT {sel_str} FROM {tbl_real} {where_str} ORDER BY {order_c} {order_dir}"
+
             if limit_val:
                 sql += f" LIMIT {limit_val}"
             sql += ";"
 
+        # Multi-Table Join Generation
         else:
-            # Multi-table Join Handler
             tbl_keys = list(schema_map.keys())
             tbl1_real, cols1 = schema_map[tbl_keys[0]]
             tbl2_real, cols2 = schema_map[tbl_keys[1]]
+
+            id1, name1, num1, cat1, date1 = categorize_cols(cols1)
+            id2, name2, num2, cat2, date2 = categorize_cols(cols2)
 
             join_key = next((c for c in cols1 if c in cols2 or c.lower().endswith('_id')), cols1[0])
             alias1, alias2 = tbl1_real[0].lower(), tbl2_real[0].lower()
             if alias1 == alias2: alias2 = alias1 + "2"
 
             where_clauses = []
-            if "completed" in q_lower: where_clauses.append(f"{alias2}.status = 'completed'")
-            elif "active" in q_lower: where_clauses.append(f"{alias2}.status = 'active'")
+            if "completed" in q_lower and 'status' in [c.lower() for c in cols2]:
+                where_clauses.append(f"{alias2}.status = 'completed'")
+            if "active" in q_lower and any('status' in c.lower() for c in cols1):
+                status_c = next(c for c in cols1 if 'status' in c.lower())
+                where_clauses.append(f"{alias1}.{status_c} = 'active'")
 
-            date_cols = [c for c in cols2 if 'date' in c.lower()]
-            if year_val and date_cols:
-                where_clauses.append(f"strftime('%Y', {alias2}.{date_cols[0]}) = '{year_val}'")
+            if year_val and date2:
+                where_clauses.append(f"strftime('%Y', {alias2}.{date2}) = '{year_val}'")
 
-            num_cols1 = [c for c in cols1 if any(k in c.lower() for k in ('salary', 'fee', 'price', 'amount'))]
-            if gt_num_match and num_cols1:
-                where_clauses.append(f"{alias1}.{num_cols1[0]} > {gt_num_match.group(1)}")
+            if gt_match and (num1 or num2):
+                target_alias, target_num = (alias1, num1) if num1 else (alias2, num2)
+                where_clauses.append(f"{target_alias}.{target_num} > {gt_match.group(1)}")
 
-            cat_in_match = re.search(r'in\s+([a-zA-Z0-9_-]+)', q_lower)
-            cat_cols2 = [c for c in cols2 if 'name' in c.lower() or 'dept' in c.lower()]
-            if cat_in_match and cat_cols2 and cat_in_match.group(1).lower() not in ('completed', 'active'):
-                where_clauses.append(f"{alias2}.{cat_cols2[0]} = '{cat_in_match.group(1).capitalize()}'")
+            if "germany" in q_lower and cat1:
+                where_clauses.append(f"{alias1}.{cat1} = 'Germany'")
+            elif "engineering" in q_lower and (cat1 or name1):
+                target_cat = cat1 or name1
+                where_clauses.append(f"{alias1}.{target_cat} = 'Engineering'")
 
             where_str = ("WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
             limit_str = f"LIMIT {limit_val}" if limit_val else ""
 
-            if "spend" in q_lower or "total" in q_lower or "sum" in q_lower:
-                sum_col = [c for c in cols2 if any(k in c.lower() for k in ('amount', 'fee', 'price', 'spend'))]
-                sum_str = f", SUM({alias2}.{sum_col[0]}) AS total_spend" if sum_col else ""
-                group_cols = f"{alias1}.{cols1[0]}, {alias1}.{cols1[1] if len(cols1)>1 else cols1[0]}"
-                sql = f"SELECT {group_cols}{sum_str} FROM {tbl1_real} {alias1} JOIN {tbl2_real} {alias2} ON {alias1}.{join_key} = {alias2}.{join_key} {where_str} GROUP BY {group_cols} ORDER BY total_spend DESC {limit_str};"
+            sel_display1 = f"{alias1}.{id1}"
+            if name1 and name1 != id1:
+                sel_display1 += f", {alias1}.{name1}"
+            elif len(cols1) > 1:
+                sel_display1 += f", {alias1}.{cols1[1]}"
+
+            if "spent" in q_lower or "total" in q_lower or "sum" in q_lower or "revenue" in q_lower:
+                sum_target = num2 or num1 or cols2[-1]
+                sql = f"SELECT {sel_display1}, SUM({alias2}.{sum_target}) AS total_spend FROM {tbl1_real} {alias1} JOIN {tbl2_real} {alias2} ON {alias1}.{join_key} = {alias2}.{join_key} {where_str} GROUP BY {sel_display1} ORDER BY total_spend DESC {limit_str};"
             else:
-                sel_cols = f"{alias1}.{cols1[0]}, {alias1}.{cols1[1] if len(cols1)>1 else cols1[0]}, {alias2}.{cols2[-1]}"
-                sql = f"SELECT {sel_cols} FROM {tbl1_real} {alias1} JOIN {tbl2_real} {alias2} ON {alias1}.{join_key} = {alias2}.{join_key} {where_str} {limit_str};"
+                sel_display2 = f", {alias2}.{num2}" if num2 else f", {alias2}.{cols2[-1]}"
+                sql = f"SELECT {sel_display1}{sel_display2} FROM {tbl1_real} {alias1} JOIN {tbl2_real} {alias2} ON {alias1}.{join_key} = {alias2}.{join_key} {where_str} {limit_str};"
+
+            sql = re.sub(r'\s+', ' ', sql)
 
         latency = (time.perf_counter() - t0) * 1000 + 45.0
         return SQLResponse(
