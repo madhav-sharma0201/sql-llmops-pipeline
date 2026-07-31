@@ -330,12 +330,20 @@ document.addEventListener("DOMContentLoaded", () => {
             if (wantsAgg && info.num) {
                 const isAvg = /average|avg|mean/i.test(qLower);
                 const aggFunc = isAvg ? "AVG" : "SUM";
-                const aggAlias = isAvg ? `avg_${info.num}` : `total_${info.num}`;
+                const aliasName = qLower.includes("revenue") ? "total_revenue" : (info.num.toLowerCase().startsWith("total_") ? info.num : `${isAvg ? "avg" : "total"}_${info.num}`);
+                
+                const hasGrpKeyword = /\b(each|per|by|every|group|breakdown)\b/i.test(qLower);
                 const mentionedGrp = mainTbl.cols.find(c => {
                     const base = c.toLowerCase().replace("_id", "");
                     return base.length >= 2 && new RegExp(`\\b(each|per|by|every)?\\s*${base}\\b`, "i").test(qLower);
-                }) || info.name || info.cat || info.id;
-                return `SELECT ${mentionedGrp}, ${aggFunc}(${info.num}) AS ${aggAlias}\nFROM ${mainTbl.name}${whereStr}\nGROUP BY ${mentionedGrp}\nORDER BY ${aggAlias} DESC${limit ? `\nLIMIT ${limit}` : ""};`;
+                });
+
+                const grpCol = mentionedGrp || (hasGrpKeyword ? (info.name || info.cat) : null);
+
+                if (grpCol) {
+                    return `SELECT ${grpCol}, ${aggFunc}(${info.num}) AS ${aliasName}\nFROM ${mainTbl.name}${whereStr}\nGROUP BY ${grpCol}\nORDER BY ${aliasName} DESC${limit ? `\nLIMIT ${limit}` : ""};`;
+                }
+                return `SELECT ${aggFunc}(${info.num}) AS ${aliasName}\nFROM ${mainTbl.name}${whereStr};`;
             }
             const selCols = [info.id, info.name, info.cat, info.num, info.date].filter(Boolean);
             const uniqueCols = [...new Set(selCols)];

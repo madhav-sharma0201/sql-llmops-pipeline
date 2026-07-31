@@ -616,22 +616,38 @@ def _generate_single_table(table: Table, intent: QueryIntent, q_lower: str, sche
                     mentioned_group_col = col
                     break
 
+        # Only GROUP BY if grouping keywords are explicitly present or a specific dimension is mentioned
+        has_grouping_keyword = any(w in q_lower for w in ('each', 'per', 'by', 'every', 'group', 'breakdown'))
+        
         if intent.group_by_hint:
             group_col_obj = table.get_col(intent.group_by_hint)
             group_col = group_col_obj if group_col_obj else (classified['name'] if classified['name'] else None)
         elif mentioned_group_col:
             group_col = mentioned_group_col
-        else:
+        elif has_grouping_keyword:
             group_col = classified['name'] if classified['name'] else (classified['category'][0] if classified['category'] else None)
+        else:
+            group_col = None
+
+        # Clean alias (avoid total_total_amount)
+        if 'revenue' in q_lower:
+            alias_name = 'total_revenue'
+        elif agg_col.name.lower().startswith('total_'):
+            alias_name = agg_col.name.lower()
+        else:
+            alias_name = f"{intent.agg_type or 'total'}_{agg_col.name}"
 
         if group_col:
             group_col_name = group_col.name if hasattr(group_col, 'name') else group_col
             agg_func = intent.agg_type.upper() if intent.agg_type else 'SUM'
-            select_parts = [group_col_name, f"{agg_func}({agg_col.name}) AS {intent.agg_type or 'total'}_{agg_col.name}"]
+            select_parts = [group_col_name, f"{agg_func}({agg_col.name}) AS {alias_name}"]
             group_by = group_col_name
-            order_by = f"{intent.agg_type or 'total'}_{agg_col.name} DESC"
+            order_by = f"{alias_name} DESC"
         else:
-            select_parts = [f"{(intent.agg_type or 'SUM').upper()}({agg_col.name}) AS total_{agg_col.name}"]
+            agg_func = intent.agg_type.upper() if intent.agg_type else 'SUM'
+            select_parts = [f"{agg_func}({agg_col.name}) AS {alias_name}"]
+            group_by = None
+            order_by = None
     else:
         # Select relevant columns
         cols_to_select = []
