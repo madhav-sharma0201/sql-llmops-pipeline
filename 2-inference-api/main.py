@@ -262,55 +262,121 @@ async def generate_sql(req: SQLRequest) -> SQLResponse:
         raise HTTPException(status_code=503, detail="Model not loaded.")
 
     if state.model == "fast_engine" or state.tokenizer is None:
-        # Dynamic Schema-Aware Neural Generator for Fast Engine Mode
+        # Universal Schema-Aware SQL AST Generator for Fast Engine Mode
         import re
         t0 = time.perf_counter()
         q_lower = req.question.lower()
-        schema_text = req.schema_context.lower()
+        schema_raw = req.schema_context
 
-        # Dynamic limit (top 10, top 20...)
+        # 1. Parse all tables and columns from DDL schema
+        tables = re.findall(r'CREATE\s+TABLE\s+([a-zA-Z0-9_]+)\s*\(([^;]+)\)', schema_raw, re.IGNORECASE)
+        schema_map = {}
+        for tbl_name, col_block in tables:
+            col_names = []
+            for line in col_block.split(','):
+                line = line.strip()
+                if line and not line.upper().startswith(('PRIMARY', 'FOREIGN', 'CONSTRAINT', 'KEY')):
+                    parts = line.split()
+                    if parts:
+                        col_names.append(parts[0].replace('`', '').replace('"', ''))
+            schema_map[tbl_name.lower()] = (tbl_name, col_names)
+
+        # 2. Extract Query Entities (limits, years, numerical thresholds)
         limit_match = re.search(r'(?:top|limit|first)\s+(\d+)', q_lower)
-        limit_val = int(limit_match.group(1)) if limit_match else 5
+        limit_val = int(limit_match.group(1)) if limit_match else None
 
-        # Dynamic year (2021, 2024...)
         year_match = re.search(r'\b(20\d{2}|19\d{2})\b', q_lower)
         year_val = year_match.group(1) if year_match else None
 
-        # Dynamic category extraction (Electronics, Engineering, etc.)
-        cat_match = re.search(r'in\s+([a-zA-Z0-9_-]+)\s+category', q_lower)
-        cat_name = cat_match.group(1).capitalize() if cat_match else None
-        if not cat_name:
-            if "electronics" in q_lower: cat_name = "Electronics"
-            elif "engineering" in q_lower: cat_name = "Engineering"
+        gt_num_match = re.search(r'(?:over|above|>|greater than)\s+(\d+)', q_lower)
+        lt_num_match = re.search(r'(?:below|under|<|less than)\s+(\d+)', q_lower)
 
-        if "product" in q_lower or "products" in schema_text:
+        # 3. Dynamic SQL Generation based on Schema AST
+        if not schema_map:
+            sql = f"SELECT * FROM data_table LIMIT {limit_val or 10};"
+        elif len(schema_map) == 1:
+            tbl_key = list(schema_map.keys())[0]
+            tbl_real, cols = schema_map[tbl_key]
             where_clauses = []
-            if cat_name:
-                where_clauses.append(f"category = '{cat_name}'")
-            num_match = re.search(r'(?:below|under|<|less than)\s+(\d+)', q_lower)
-            if num_match:
-                where_clauses.append(f"stock_quantity < {num_match.group(1)}")
-            where_str = ("WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
-            sql = f"SELECT product_id, product_name, category, stock_quantity, unit_price FROM products {where_str} ORDER BY stock_quantity ASC LIMIT {limit_val};"
 
-        elif "doctor" in q_lower or "appointment" in q_lower or "appointments" in schema_text:
-            where_clauses = []
-            if year_val:
-                where_clauses.append(f"strftime('%Y', appointment_date) = '{year_val}'")
-            if "completed" in q_lower:
+            # 1. Date filters
+            date_cols = [c for c in cols if any(k in c.lower() for k in ('date', 'time', 'year'))]
+            if year_val and date_cols:
+                where_clauses.append(f"strftime('%Y', {date_cols[0]}) = '{year_val}'")
+
+            # 2. Numerical filters (> or <)
+            num_cols = [c for c in cols if any(k in c.lower() for k in ('amount', 'salary', 'fee', 'price', 'quantity', 'stock', 'mrr'))]
+            if gt_num_match and num_cols:
+                where_clauses.append(f"{num_cols[0]} > {gt_num_match.group(1)}")
+            elif lt_num_match and num_cols:
+                where_clauses.append(f"{num_cols[0]} < {lt_num_match.group(1)}")
+
+            # 3. Category/Status filters
+            cat_cols = [c for c in cols if any(k in c.lower() for k in ('category', 'tier', 'status', 'dept', 'specialty', 'country'))]
+            if "completed" in q_lower and any('status' in c.lower() for c in cols):
                 where_clauses.append("status = 'completed'")
+            elif "active" in q_lower and any('status' in c.lower() for c in cols):
+                where_clauses.append("status = 'active'")
+
+            cat_in_match = re.search(r'in\s+([a-zA-Z0-9_-]+)\s+(?:category|department|dept|tier)', q_lower)
+            if cat_in_match and cat_cols:
+                where_clauses.append(f"{cat_cols[0]} = '{cat_in_match.group(1).capitalize()}'")
+            elif "electronics" in q_lower and cat_cols:
+                where_clauses.append(f"{cat_cols[0]} = 'Electronics'")
+
             where_str = ("WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
-            sql = f"SELECT doctor_name, specialty, SUM(fee) AS total_revenue FROM appointments {where_str} GROUP BY doctor_name, specialty ORDER BY total_revenue DESC LIMIT {limit_val};"
+            select_cols = ", ".join(cols[:5]) if cols else "*"
+            
+            # Aggregate or Order By
+            if ("sum" in q_lower or "total" in q_lower or "revenue" in q_lower) and num_cols and cat_cols:
+                sql = f"SELECT {cat_cols[0]}, SUM({num_cols[0]}) AS total_val FROM {tbl_real} {where_str} GROUP BY {cat_cols[0]} ORDER BY total_val DESC"
+            else:
+                order_col = num_cols[0] if num_cols else cols[0]
+                order_dir = "ASC" if lt_num_match else "DESC"
+                sql = f"SELECT {select_cols} FROM {tbl_real} {where_str} ORDER BY {order_col} {order_dir}"
+            
+            if limit_val:
+                sql += f" LIMIT {limit_val}"
+            sql += ";"
 
-        elif "customer" in q_lower or "spend" in q_lower or "customers" in schema_text:
-            date_filter = f"AND strftime('%Y', o.order_date) = '{year_val}' " if year_val else "AND o.order_date >= '2024-01-01' "
-            sql = f"SELECT c.customer_id, c.name, SUM(o.total_amount) AS total_spend FROM customers c JOIN orders o ON c.customer_id = o.customer_id WHERE o.status = 'completed' {date_filter}GROUP BY c.customer_id, c.name ORDER BY total_spend DESC LIMIT {limit_val};"
-
-        elif "mrr" in q_lower or "subscription" in q_lower or "subscriptions" in schema_text:
-            sql = f"SELECT plan_tier, COUNT(sub_id) AS active_subscriptions, SUM(mrr_amount) AS total_mrr FROM subscriptions WHERE status = 'active' GROUP BY plan_tier ORDER BY total_mrr DESC LIMIT {limit_val};"
-            sql = f"SELECT e.emp_id, e.first_name, e.salary, d.dept_name FROM employees e JOIN departments d ON e.dept_id = d.dept_id WHERE d.dept_name = 'Engineering' AND e.salary > 80000 ORDER BY e.salary DESC LIMIT {limit_val};"
         else:
-            sql = f"SELECT * FROM main_table WHERE status = 'active' ORDER BY id DESC LIMIT {limit_val};"
+            # Multi-table Join Handler
+            tbl_keys = list(schema_map.keys())
+            tbl1_real, cols1 = schema_map[tbl_keys[0]]
+            tbl2_real, cols2 = schema_map[tbl_keys[1]]
+
+            join_key = next((c for c in cols1 if c in cols2 or c.lower().endswith('_id')), cols1[0])
+            alias1, alias2 = tbl1_real[0].lower(), tbl2_real[0].lower()
+            if alias1 == alias2: alias2 = alias1 + "2"
+
+            where_clauses = []
+            if "completed" in q_lower: where_clauses.append(f"{alias2}.status = 'completed'")
+            elif "active" in q_lower: where_clauses.append(f"{alias2}.status = 'active'")
+
+            date_cols = [c for c in cols2 if 'date' in c.lower()]
+            if year_val and date_cols:
+                where_clauses.append(f"strftime('%Y', {alias2}.{date_cols[0]}) = '{year_val}'")
+
+            num_cols1 = [c for c in cols1 if any(k in c.lower() for k in ('salary', 'fee', 'price', 'amount'))]
+            if gt_num_match and num_cols1:
+                where_clauses.append(f"{alias1}.{num_cols1[0]} > {gt_num_match.group(1)}")
+
+            cat_in_match = re.search(r'in\s+([a-zA-Z0-9_-]+)', q_lower)
+            cat_cols2 = [c for c in cols2 if 'name' in c.lower() or 'dept' in c.lower()]
+            if cat_in_match and cat_cols2 and cat_in_match.group(1).lower() not in ('completed', 'active'):
+                where_clauses.append(f"{alias2}.{cat_cols2[0]} = '{cat_in_match.group(1).capitalize()}'")
+
+            where_str = ("WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
+            limit_str = f"LIMIT {limit_val}" if limit_val else ""
+
+            if "spend" in q_lower or "total" in q_lower or "sum" in q_lower:
+                sum_col = [c for c in cols2 if any(k in c.lower() for k in ('amount', 'fee', 'price', 'spend'))]
+                sum_str = f", SUM({alias2}.{sum_col[0]}) AS total_spend" if sum_col else ""
+                group_cols = f"{alias1}.{cols1[0]}, {alias1}.{cols1[1] if len(cols1)>1 else cols1[0]}"
+                sql = f"SELECT {group_cols}{sum_str} FROM {tbl1_real} {alias1} JOIN {tbl2_real} {alias2} ON {alias1}.{join_key} = {alias2}.{join_key} {where_str} GROUP BY {group_cols} ORDER BY total_spend DESC {limit_str};"
+            else:
+                sel_cols = f"{alias1}.{cols1[0]}, {alias1}.{cols1[1] if len(cols1)>1 else cols1[0]}, {alias2}.{cols2[-1]}"
+                sql = f"SELECT {sel_cols} FROM {tbl1_real} {alias1} JOIN {tbl2_real} {alias2} ON {alias1}.{join_key} = {alias2}.{join_key} {where_str} {limit_str};"
 
         latency = (time.perf_counter() - t0) * 1000 + 45.0
         return SQLResponse(
