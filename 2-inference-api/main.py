@@ -160,10 +160,16 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+from fastapi.responses import RedirectResponse
+
 # ── Mount Frontend Web Application ──────────────────────────────────────────
 frontend_dir = Path(__file__).resolve().parent.parent / "4-frontend"
 if frontend_dir.exists():
     app.mount("/ui", StaticFiles(directory=str(frontend_dir), html=True), name="frontend")
+
+@app.get("/")
+async def root_redirect():
+    return RedirectResponse(url="/ui/")
 
 
 
