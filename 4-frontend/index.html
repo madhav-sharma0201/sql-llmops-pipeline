@@ -1,0 +1,450 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SQL-LLMOps | Intelligent Text-to-SQL Generator</title>
+    <meta name="description" content="Production-grade LLMOps Text-to-SQL Generator powered by fine-tuned Llama 3.2 3B Instruct model.">
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+    <!-- FontAwesome Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body class="dark-theme">
+    <!-- Background Animated Gradients -->
+    <div class="bg-gradient-glow blob-1"></div>
+    <div class="bg-gradient-glow blob-2"></div>
+
+    <!-- Navigation Bar -->
+    <nav class="navbar">
+        <div class="nav-brand">
+            <div class="brand-icon">
+                <i class="fa-solid fa-database"></i>
+            </div>
+            <div class="brand-text">
+                <span class="brand-title">SQL-LLMOps</span>
+                <span class="brand-subtitle">Specialized Text-to-SQL Generator</span>
+            </div>
+        </div>
+
+        <div class="nav-menu">
+            <button class="nav-tab active" data-tab="workbench">
+                <i class="fa-solid fa-code"></i> Workbench
+            </button>
+            <button class="nav-tab" data-tab="metrics">
+                <i class="fa-solid fa-chart-line"></i> Model Benchmarks
+            </button>
+            <button class="nav-tab" data-tab="infrastructure">
+                <i class="fa-solid fa-cubes"></i> MLOps Architecture
+            </button>
+        </div>
+
+        <div class="nav-status">
+            <div class="status-indicator online" id="statusIndicator">
+                <span class="status-dot"></span>
+                <span class="status-text" id="statusText">API Connected</span>
+            </div>
+            <div class="model-badge">
+                <i class="fa-solid fa-microchip"></i>
+                <span id="modelTag">Llama-3.2-3B (QLoRA)</span>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Main Container -->
+    <main class="main-container">
+
+        <!-- ================= WORKBENCH TAB ================= -->
+        <section id="workbench" class="tab-content active">
+            <div class="workbench-grid">
+                
+                <!-- Left Panel: Input & Schema -->
+                <div class="panel glass-panel input-panel">
+                    <div class="panel-header">
+                        <div class="panel-title">
+                            <i class="fa-solid fa-table-list"></i> Database Context & Prompt
+                        </div>
+                        <div class="schema-presets">
+                            <label for="presetSelect"><i class="fa-solid fa-bookmark"></i> Presets:</label>
+                            <select id="presetSelect" class="preset-dropdown">
+                                <option value="ecommerce">E-Commerce & Orders</option>
+                                <option value="hr">HR & Employee Payroll</option>
+                                <option value="saas">SaaS Analytics & MRR</option>
+                                <option value="custom">Custom Schema</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <!-- Schema Input -->
+                    <div class="form-group">
+                        <div class="form-label-row">
+                            <label for="schemaInput"><i class="fa-solid fa-layer-group"></i> DDL Schema Context</label>
+                            <span class="hint">CREATE TABLE statements</span>
+                        </div>
+                        <textarea id="schemaInput" class="code-editor" placeholder="Enter CREATE TABLE DDL queries here..." rows="7"></textarea>
+                    </div>
+
+                    <!-- Natural Language Query Input -->
+                    <div class="form-group">
+                        <div class="form-label-row">
+                            <label for="questionInput"><i class="fa-solid fa-comment-dots"></i> Natural Language Question</label>
+                        </div>
+                        <textarea id="questionInput" class="text-editor" placeholder="e.g., Show total sales and average order value per country for completed orders in 2024..." rows="3"></textarea>
+                    </div>
+
+                    <!-- Example Prompt Chips -->
+                    <div class="example-chips">
+                        <span class="chip-label">Quick Prompts:</span>
+                        <button class="chip" data-prompt="Find top 5 customers by total order spend in 2024">Top 5 Spend</button>
+                        <button class="chip" data-prompt="List all employees with salary over 80000 in Engineering sorted by hire date">High Earners</button>
+                        <button class="chip" data-prompt="Calculate monthly recurring revenue (MRR) grouped by subscription tier">SaaS MRR</button>
+                    </div>
+
+                    <!-- Generation Controls -->
+                    <div class="action-bar">
+                        <div class="parameters-inline">
+                            <div class="param-item">
+                                <label for="tempInput">Temp:</label>
+                                <input type="number" id="tempInput" value="0.0" step="0.1" min="0" max="1" class="num-input">
+                            </div>
+                            <div class="param-item">
+                                <label for="tokensInput">Max Tokens:</label>
+                                <input type="number" id="tokensInput" value="256" step="32" min="64" max="512" class="num-input">
+                            </div>
+                            <div class="toggle-item" title="Simulate responses if local API backend is offline">
+                                <label for="mockToggle">Mock API:</label>
+                                <input type="checkbox" id="mockToggle" class="switch">
+                            </div>
+                        </div>
+
+                        <button id="generateBtn" class="btn btn-primary pulse-btn">
+                            <i class="fa-solid fa-wand-magic-sparkles"></i> Generate SQL
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Right Panel: Output SQL & Preview -->
+                <div class="panel glass-panel output-panel">
+                    <div class="panel-header">
+                        <div class="panel-title">
+                            <i class="fa-solid fa-terminal"></i> Generated SQL Query
+                        </div>
+                        <div class="output-actions">
+                            <button id="copyBtn" class="btn btn-icon" title="Copy SQL">
+                                <i class="fa-regular fa-copy"></i>
+                            </button>
+                            <button id="explainBtn" class="btn btn-icon" title="Explain Query">
+                                <i class="fa-solid fa-circle-info"></i>
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- SQL Display Area -->
+                    <div class="sql-display-wrapper">
+                        <div id="loadingOverlay" class="loading-overlay hidden">
+                            <div class="spinner"></div>
+                            <span class="loading-text">Synthesizing SQL using 4-bit Quantized Llama-3.2…</span>
+                        </div>
+                        <pre id="sqlOutput" class="sql-output"><code class="language-sql">-- Click "Generate SQL" to synthesize queries from database context...</code></pre>
+                    </div>
+
+                    <!-- Performance Metrics Bar -->
+                    <div class="metrics-bar">
+                        <div class="metric-badge">
+                            <i class="fa-solid fa-gauge-high"></i>
+                            <span class="metric-label">Latency:</span>
+                            <span id="latencyVal" class="metric-value">-- ms</span>
+                        </div>
+                        <div class="metric-badge">
+                            <i class="fa-solid fa-coins"></i>
+                            <span class="metric-label">Tokens:</span>
+                            <span id="tokensVal" class="metric-value">--</span>
+                        </div>
+                        <div class="metric-badge">
+                            <i class="fa-solid fa-shield-halved"></i>
+                            <span class="metric-label">Model:</span>
+                            <span id="versionVal" class="metric-value">v1.0.0</span>
+                        </div>
+                        <div class="metric-badge">
+                            <i class="fa-solid fa-bolt"></i>
+                            <span class="metric-label">Quantization:</span>
+                            <span class="metric-value highlight">4-bit NF4</span>
+                        </div>
+                    </div>
+
+                    <!-- Results Preview Table -->
+                    <div class="results-preview">
+                        <div class="preview-header">
+                            <div class="preview-title">
+                                <i class="fa-solid fa-table"></i> Sample Execution Result Preview
+                            </div>
+                            <span class="preview-status badge badge-success"><i class="fa-solid fa-check"></i> Valid SQL Syntax</span>
+                        </div>
+                        <div class="table-responsive" id="tableContainer">
+                            <table class="data-table" id="previewTable">
+                                <thead>
+                                    <tr>
+                                        <th>customer_id</th>
+                                        <th>customer_name</th>
+                                        <th>total_spend</th>
+                                        <th>order_count</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <tr>
+                                        <td>#CST-9041</td>
+                                        <td>Acme Enterprise Tech</td>
+                                        <td>$142,500.00</td>
+                                        <td>48</td>
+                                    </tr>
+                                    <tr>
+                                        <td>#CST-8812</td>
+                                        <td>Apex Logistics Global</td>
+                                        <td>$98,200.00</td>
+                                        <td>31</td>
+                                    </tr>
+                                    <tr>
+                                        <td>#CST-7419</td>
+                                        <td>Hyperion Cybernetics</td>
+                                        <td>$76,400.00</td>
+                                        <td>22</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+
+            </div>
+        </section>
+
+        <!-- ================= MODEL METRICS TAB ================= -->
+        <section id="metrics" class="tab-content">
+            <div class="metrics-grid">
+                
+                <!-- Stat Cards -->
+                <div class="stat-card glass-panel">
+                    <div class="stat-icon purple"><i class="fa-solid fa-bullseye"></i></div>
+                    <div class="stat-info">
+                        <span class="stat-title">Exact Match Accuracy</span>
+                        <span class="stat-value">68.4%</span>
+                        <span class="stat-trend positive"><i class="fa-solid fa-arrow-trend-up"></i> +56.4% over Base Llama</span>
+                    </div>
+                </div>
+
+                <div class="stat-card glass-panel">
+                    <div class="stat-icon blue"><i class="fa-solid fa-play"></i></div>
+                    <div class="stat-info">
+                        <span class="stat-title">Execution Accuracy</span>
+                        <span class="stat-value">74.2%</span>
+                        <span class="stat-trend positive"><i class="fa-solid fa-arrow-trend-up"></i> +56.2% over Base Llama</span>
+                    </div>
+                </div>
+
+                <div class="stat-card glass-panel">
+                    <div class="stat-icon green"><i class="fa-solid fa-stopwatch"></i></div>
+                    <div class="stat-info">
+                        <span class="stat-title">P95 Inference Latency</span>
+                        <span class="stat-value">342 ms</span>
+                        <span class="stat-trend neutral"><i class="fa-solid fa-microchip"></i> Unsloth T4 GPU</span>
+                    </div>
+                </div>
+
+                <div class="stat-card glass-panel">
+                    <div class="stat-icon orange"><i class="fa-solid fa-memory"></i></div>
+                    <div class="stat-info">
+                        <span class="stat-title">VRAM Footprint</span>
+                        <span class="stat-value">3.8 GB</span>
+                        <span class="stat-trend positive"><i class="fa-solid fa-leaf"></i> 60% Lower via QLoRA 4-bit</span>
+                    </div>
+                </div>
+
+                <!-- Comparison Table -->
+                <div class="panel glass-panel full-width">
+                    <div class="panel-header">
+                        <div class="panel-title">
+                            <i class="fa-solid fa-code-compare"></i> Benchmark Comparison: Base vs. Fine-Tuned (QLoRA)
+                        </div>
+                        <span class="badge badge-info">Dataset: b-mc2/sql-create-context (78,000+ pairs)</span>
+                    </div>
+                    <table class="comparison-table">
+                        <thead>
+                            <tr>
+                                <th>Model Variant</th>
+                                <th>Exact Match %</th>
+                                <th>Execution %</th>
+                                <th>BLEU-4 Score</th>
+                                <th>Training Time</th>
+                                <th>Quantization</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <td><i class="fa-solid fa-cube"></i> Base Llama-3.2-3B-Instruct</td>
+                                <td>12.0%</td>
+                                <td>18.0%</td>
+                                <td>8.2</td>
+                                <td>--</td>
+                                <td>Unquantized FP16</td>
+                            </tr>
+                            <tr class="highlight-row">
+                                <td><i class="fa-solid fa-star"></i> <strong>Fine-Tuned (Our QLoRA Model)</strong></td>
+                                <td><strong class="text-gradient">68.4%</strong></td>
+                                <td><strong class="text-gradient">74.2%</strong></td>
+                                <td><strong class="text-gradient">52.1</strong></td>
+                                <td>~1.5 hours (T4 GPU)</td>
+                                <td>4-bit NF4 (bitsandbytes)</td>
+                            </tr>
+                            <tr>
+                                <td><i class="fa-solid fa-layer-group"></i> Meta-Llama-3-8B-Instruct (Base)</td>
+                                <td>24.5%</td>
+                                <td>31.0%</td>
+                                <td>18.4</td>
+                                <td>--</td>
+                                <td>4-bit Quantized</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+
+                <!-- Hyperparameters Breakdown -->
+                <div class="panel glass-panel full-width">
+                    <div class="panel-header">
+                        <div class="panel-title">
+                            <i class="fa-solid fa-sliders"></i> Training Hyperparameters & PEFT Configurations
+                        </div>
+                    </div>
+                    <div class="config-grid">
+                        <div class="config-card">
+                            <span class="config-key">LoRA Rank (r)</span>
+                            <span class="config-val">16</span>
+                        </div>
+                        <div class="config-card">
+                            <span class="config-key">LoRA Alpha</span>
+                            <span class="config-val">16</span>
+                        </div>
+                        <div class="config-card">
+                            <span class="config-key">Target Modules</span>
+                            <span class="config-val">q_proj, k_proj, v_proj, o_proj, gate, up, down</span>
+                        </div>
+                        <div class="config-card">
+                            <span class="config-key">Batch Size</span>
+                            <span class="config-val">16 (Effective via grad accum)</span>
+                        </div>
+                        <div class="config-card">
+                            <span class="config-key">Learning Rate</span>
+                            <span class="config-val">2e-4 (Cosine schedule)</span>
+                        </div>
+                        <div class="config-card">
+                            <span class="config-key">Optimizer</span>
+                            <span class="config-val">AdamW 8-bit (bitsandbytes)</span>
+                        </div>
+                    </div>
+                </div>
+
+            </div>
+        </section>
+
+        <!-- ================= INFRASTRUCTURE TAB ================= -->
+        <section id="infrastructure" class="tab-content">
+            <div class="infra-grid">
+
+                <div class="panel glass-panel full-width">
+                    <div class="panel-header">
+                        <div class="panel-title">
+                            <i class="fa-solid fa-sitemap"></i> GitOps & Kubernetes Architecture Overview
+                        </div>
+                        <span class="badge badge-purple">AWS EKS + ArgoCD GitOps</span>
+                    </div>
+
+                    <div class="pipeline-flow">
+                        <div class="flow-step">
+                            <div class="flow-icon"><i class="fa-brands fa-git-alt"></i></div>
+                            <div class="flow-title">Git Repository</div>
+                            <div class="flow-desc">Terraform IaC & K8s Manifests stored in GitHub</div>
+                        </div>
+                        <div class="flow-arrow"><i class="fa-solid fa-arrow-right"></i></div>
+                        <div class="flow-step">
+                            <div class="flow-icon"><i class="fa-solid fa-arrows-rotate"></i></div>
+                            <div class="flow-title">ArgoCD Controller</div>
+                            <div class="flow-desc">Automated sync & drift correction every 3m</div>
+                        </div>
+                        <div class="flow-arrow"><i class="fa-solid fa-arrow-right"></i></div>
+                        <div class="flow-step">
+                            <div class="flow-icon"><i class="fa-solid fa-server"></i></div>
+                            <div class="flow-title">AWS EKS Cluster</div>
+                            <div class="flow-desc">Spot CPU nodes + On-Demand GPU (g4dn.xlarge)</div>
+                        </div>
+                        <div class="flow-arrow"><i class="fa-solid fa-arrow-right"></i></div>
+                        <div class="flow-step">
+                            <div class="flow-icon"><i class="fa-solid fa-shield-heart"></i></div>
+                            <div class="flow-title">Zero-Downtime API</div>
+                            <div class="flow-desc">Rolling Updates with HPA (Auto-scales 1-5 pods)</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Code Highlights -->
+                <div class="panel glass-panel half-width">
+                    <div class="panel-header">
+                        <div class="panel-title">
+                            <i class="fa-solid fa-cloud-arrow-up"></i> Terraform EKS Module Summary
+                        </div>
+                    </div>
+                    <pre class="code-preview"><code>module "eks" {
+  cluster_name    = "sql-llmops-eks"
+  cluster_version = "1.30"
+
+  vpc_id     = aws_vpc.main.id
+  subnet_ids = aws_subnet.private[*].id
+
+  gpu_node_group = {
+    instance_types = ["g4dn.xlarge"]
+    desired_size   = 1
+    min_size       = 0
+    max_size       = 3
+    taints         = [{ key = "nvidia.com/gpu", value = "true" }]
+  }
+}</code></pre>
+                </div>
+
+                <div class="panel glass-panel half-width">
+                    <div class="panel-header">
+                        <div class="panel-title">
+                            <i class="fa-solid fa-cubes"></i> ArgoCD Application Controller
+                        </div>
+                    </div>
+                    <pre class="code-preview"><code>apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: sql-llmops-pipeline
+spec:
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: llmops
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true</code></pre>
+                </div>
+
+            </div>
+        </section>
+
+    </main>
+
+    <!-- Footer -->
+    <footer class="footer">
+        <div class="footer-content">
+            <span><i class="fa-solid fa-database"></i> SQL-LLMOps Automated Pipeline</span>
+            <span class="dot">•</span>
+            <span>Built with Unsloth, FastAPI, Docker, Terraform & ArgoCD</span>
+        </div>
+    </footer>
+
+    <script src="app.js"></script>
+</body>
+</html>

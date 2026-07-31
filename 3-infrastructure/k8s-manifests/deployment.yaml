@@ -1,0 +1,188 @@
+# ────────────────────────────────────────────────────────────────────────────────
+# deployment.yaml
+# Kubernetes Deployment for the Text-to-SQL Inference API
+#
+# Key design decisions:
+#   - Single replica by default; scale horizontally by increasing replicas.
+#   - Resource requests/limits tuned for a 4-CPU / 8 GiB memory node.
+#   - Readiness and liveness probes point to the /health endpoint.
+#   - Model weights are mounted from a PersistentVolumeClaim so the large
+#     adapter files are not baked into the container image.
+# ────────────────────────────────────────────────────────────────────────────────
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sql-inference-api
+  namespace: llmops
+  labels:
+    app: sql-inference-api
+    version: v1
+    component: inference
+  annotations:
+    # ArgoCD will sync this from Git on every push to the target branch.
+    argocd.argoproj.io/sync-wave: "2"
+spec:
+  replicas: 1
+
+  selector:
+    matchLabels:
+      app: sql-inference-api
+
+  # ── Rolling-update strategy — ensures zero-downtime deployments ───────────
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+
+  template:
+    metadata:
+      labels:
+        app: sql-inference-api
+        version: v1
+      annotations:
+        # Force a pod restart when the ConfigMap / Secret changes
+        checksum/config: "{{ include (print $.Template.BasePath \"/configmap.yaml\") . | sha256sum }}"
+    spec:
+      # ── Security context (run as non-root) ─────────────────────────────────
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+
+      # ── Init container: wait for the model volume to be populated ──────────
+      initContainers:
+        - name: check-model-weights
+          image: busybox:1.36
+          command:
+            - sh
+            - -c
+            - |
+              echo "Checking for adapter weights…"
+              until [ -f /model/adapter_config.json ]; do
+                echo "Waiting for adapter_config.json…"
+                sleep 5
+              done
+              echo "Model weights found — proceeding."
+          volumeMounts:
+            - name: model-weights
+              mountPath: /model
+
+      containers:
+        - name: sql-inference-api
+          image: your-registry/sql-inference-api:v1.0.0   # replace with your registry
+          imagePullPolicy: Always
+          ports:
+            - name: http
+              containerPort: 8000
+              protocol: TCP
+
+          # ── Environment variables (non-secret) ──────────────────────────────
+          env:
+            - name: MODEL_PATH
+              value: /app/adapter_weights
+            - name: BASE_MODEL
+              value: unsloth/Llama-3.2-3B-Instruct
+            - name: MODEL_VERSION
+              value: v1.0.0
+            - name: TEMPERATURE
+              value: "0.0"
+            - name: MAX_NEW_TOKENS
+              value: "256"
+            - name: PORT
+              value: "8000"
+            - name: LOG_LEVEL
+              value: info
+            # ── Secrets (sourced from a Kubernetes Secret, not plain text) ───
+            - name: HF_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: llmops-secrets
+                  key: HF_TOKEN
+                  optional: true
+
+          # ── Resource requests and limits ────────────────────────────────────
+          resources:
+            requests:
+              cpu: "2"
+              memory: "6Gi"
+            limits:
+              cpu: "4"
+              memory: "8Gi"
+              # Uncomment for GPU nodes:
+              # nvidia.com/gpu: "1"
+
+          # ── Volume mounts ────────────────────────────────────────────────────
+          volumeMounts:
+            - name: model-weights
+              mountPath: /app/adapter_weights
+              readOnly: true
+
+          # ── Readiness probe — gates traffic until model is loaded ───────────
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 120    # give the model time to load
+            periodSeconds: 10
+            failureThreshold: 3
+            successThreshold: 1
+            timeoutSeconds: 5
+
+          # ── Liveness probe — restarts the pod if it becomes unhealthy ───────
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 150
+            periodSeconds: 30
+            failureThreshold: 3
+            timeoutSeconds: 10
+
+          # ── Startup probe — allows extra time for first boot ─────────────────
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 60
+            periodSeconds: 10
+            failureThreshold: 20        # up to 200 s before giving up
+            timeoutSeconds: 10
+
+      # ── Volumes ─────────────────────────────────────────────────────────────
+      volumes:
+        - name: model-weights
+          persistentVolumeClaim:
+            claimName: sql-model-weights-pvc
+
+      # ── Node selector (target GPU nodes if available) ───────────────────────
+      # nodeSelector:
+      #   accelerator: nvidia-t4
+
+      # ── Tolerations for GPU node taints ─────────────────────────────────────
+      # tolerations:
+      #   - key: nvidia.com/gpu
+      #     operator: Exists
+      #     effect: NoSchedule
+
+      # ── Image pull secret (if using a private registry) ──────────────────────
+      # imagePullSecrets:
+      #   - name: registry-credentials
+
+---
+# ── PersistentVolumeClaim for the model weights ───────────────────────────────
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: sql-model-weights-pvc
+  namespace: llmops
+  labels:
+    app: sql-inference-api
+spec:
+  accessModes:
+    - ReadOnlyMany
+  resources:
+    requests:
+      storage: 20Gi
+  storageClassName: gp3    # AWS EBS gp3 — change to your cluster's StorageClass

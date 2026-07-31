@@ -1,0 +1,95 @@
+# ────────────────────────────────────────────────────────────────────────────────
+# docker-compose.yml
+# Local testing stack for the Text-to-SQL inference service
+#
+# Usage:
+#   docker compose up --build           # start the API + optional MLflow UI
+#   docker compose up api               # start only the inference API
+#   docker compose logs -f api          # tail logs
+#   docker compose down                 # stop and remove containers
+# ────────────────────────────────────────────────────────────────────────────────
+name: sql-llmops
+
+services:
+
+  # ── Inference API ─────────────────────────────────────────────────────────
+  api:
+    build:
+      context: .
+      dockerfile: 2-inference-api/Dockerfile
+      target: runtime
+    container_name: sql-inference-api
+    image: sql-inference-api:local
+
+    # Mount your fine-tuned adapter weights into the container.
+    # Run  python 1-model-training/train_qlora.py  first to generate them.
+    volumes:
+      - ./1-model-training/adapter_weights:/app/adapter_weights:ro
+      - ~/.cache/huggingface:/root/.cache/huggingface
+
+    env_file:
+      - ./2-inference-api/.env.example   # copy to .env and customise
+
+    environment:
+      - MODEL_PATH=/app/adapter_weights
+      - MODEL_VERSION=v1.0.0
+      - MAX_NEW_TOKENS=64
+      - LOG_LEVEL=info
+      - PORT=8000
+
+    ports:
+      - "8000:8000"
+
+    # Health-check mirrors the Kubernetes readiness probe
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s   # model load takes ~60–90 s
+
+    restart: unless-stopped
+    networks:
+      - llmops-net
+
+  # ── MLflow Tracking Server ────────────────────────────────────────────────
+  mlflow:
+    image: ghcr.io/mlflow/mlflow:v2.14.0
+    container_name: mlflow-server
+    command: >
+      mlflow server
+        --host 0.0.0.0
+        --port 5000
+        --backend-store-uri sqlite:///mlruns/mlflow.db
+        --default-artifact-root /mlruns/artifacts
+    volumes:
+      - mlflow-data:/mlruns
+    ports:
+      - "5001:5000"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped
+    networks:
+      - llmops-net
+
+  # ── Prometheus (optional — scrapes the /metrics endpoint) ─────────────────
+  # prometheus:
+  #   image: prom/prometheus:v2.53.0
+  #   container_name: prometheus
+  #   volumes:
+  #     - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+  #   ports:
+  #     - "9090:9090"
+  #   networks:
+  #     - llmops-net
+
+networks:
+  llmops-net:
+    driver: bridge
+
+volumes:
+  mlflow-data:
+    driver: local

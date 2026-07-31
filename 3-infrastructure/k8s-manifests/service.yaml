@@ -1,0 +1,132 @@
+# ────────────────────────────────────────────────────────────────────────────────
+# service.yaml
+# Kubernetes Service + Ingress for the Text-to-SQL Inference API
+# ────────────────────────────────────────────────────────────────────────────────
+
+# ── Namespace ─────────────────────────────────────────────────────────────────
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: llmops
+  labels:
+    app.kubernetes.io/part-of: sql-llmops-pipeline
+    managed-by: argocd
+
+---
+# ── ClusterIP Service (internal) ──────────────────────────────────────────────
+# Routes traffic from the Ingress / external LoadBalancer to the pods.
+apiVersion: v1
+kind: Service
+metadata:
+  name: sql-inference-api-svc
+  namespace: llmops
+  labels:
+    app: sql-inference-api
+    component: inference
+  annotations:
+    # Expose Prometheus /metrics scraping (if you add a metrics endpoint later)
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "8000"
+    prometheus.io/path: "/metrics"
+spec:
+  type: ClusterIP
+  selector:
+    app: sql-inference-api
+  ports:
+    - name: http
+      protocol: TCP
+      port: 80
+      targetPort: 8000
+
+---
+# ── LoadBalancer Service (external — for cloud environments) ──────────────────
+# Provisioned by the AWS LBC (Load Balancer Controller) on EKS.
+# Comment this out if you are using the Ingress resource below instead.
+apiVersion: v1
+kind: Service
+metadata:
+  name: sql-inference-api-lb
+  namespace: llmops
+  labels:
+    app: sql-inference-api
+  annotations:
+    # AWS Network Load Balancer
+    service.beta.kubernetes.io/aws-load-balancer-type: "external"
+    service.beta.kubernetes.io/aws-load-balancer-nlb-target-type: "ip"
+    service.beta.kubernetes.io/aws-load-balancer-scheme: "internet-facing"
+spec:
+  type: LoadBalancer
+  selector:
+    app: sql-inference-api
+  ports:
+    - name: http
+      protocol: TCP
+      port: 80
+      targetPort: 8000
+
+---
+# ── Ingress (ALB — requires AWS Load Balancer Controller on EKS) ──────────────
+# Provides host-based routing and TLS termination.
+# Replace <YOUR_DOMAIN> with your actual domain registered in Route 53.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: sql-inference-api-ingress
+  namespace: llmops
+  labels:
+    app: sql-inference-api
+  annotations:
+    kubernetes.io/ingress.class: alb
+    alb.ingress.kubernetes.io/scheme: internet-facing
+    alb.ingress.kubernetes.io/target-type: ip
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTP":80},{"HTTPS":443}]'
+    # Redirect HTTP → HTTPS
+    alb.ingress.kubernetes.io/ssl-redirect: "443"
+    # ACM certificate ARN (replace with yours)
+    alb.ingress.kubernetes.io/certificate-arn: arn:aws:acm:us-east-1:123456789:certificate/your-cert-arn
+    # Health-check path matches the FastAPI /health endpoint
+    alb.ingress.kubernetes.io/healthcheck-path: /health
+    alb.ingress.kubernetes.io/healthcheck-interval-seconds: "30"
+    alb.ingress.kubernetes.io/healthy-threshold-count: "2"
+    alb.ingress.kubernetes.io/unhealthy-threshold-count: "3"
+spec:
+  rules:
+    - host: api.sql-llmops.example.com    # ← replace with your domain
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: sql-inference-api-svc
+                port:
+                  number: 80
+
+---
+# ── HorizontalPodAutoscaler ────────────────────────────────────────────────────
+# Scales the Deployment between 1 and 5 replicas based on CPU utilisation.
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: sql-inference-api-hpa
+  namespace: llmops
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: sql-inference-api
+  minReplicas: 1
+  maxReplicas: 5
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 80

@@ -1,0 +1,132 @@
+# ────────────────────────────────────────────────────────────────────────────────
+# argocd-app.yaml
+# ArgoCD Application — GitOps sync controller for the LLMOps pipeline
+#
+# This manifest tells ArgoCD to watch a Git repository branch and
+# continuously reconcile the cluster state to match the manifests stored there.
+#
+# Prerequisites:
+#   1. ArgoCD installed in the argocd namespace (https://argo-cd.readthedocs.io)
+#   2. The 'llmops' namespace created (see service.yaml Namespace resource)
+#   3. Target Git repository accessible by ArgoCD
+#
+# Apply:
+#   kubectl apply -f argocd-app.yaml -n argocd
+# ────────────────────────────────────────────────────────────────────────────────
+
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: sql-llmops-pipeline
+  namespace: argocd
+  labels:
+    project: llmops
+    environment: production
+  # Finalizer ensures ArgoCD cleans up managed resources when the
+  # Application is deleted from the cluster.
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+  annotations:
+    # Notification recipients (requires ArgoCD Notifications add-on)
+    notifications.argoproj.io/subscribe.on-sync-succeeded.slack: llmops-deploys
+    notifications.argoproj.io/subscribe.on-sync-failed.slack: llmops-alerts
+
+spec:
+  # ── ArgoCD project that scopes this app's permissions ─────────────────────
+  project: default    # change to a custom AppProject for RBAC isolation
+
+  # ── Source: Git repository containing the Kubernetes manifests ─────────────
+  source:
+    # ─── Replace with your actual repository URL ────────────────────────────
+    repoURL: https://github.com/your-org/sql-llmops-pipeline.git
+
+    # Branch / tag / commit SHA to track.
+    # 'main' tracks the latest commit on the main branch.
+    targetRevision: main
+
+    # Path within the repository that contains the manifests to deploy.
+    path: 3-infrastructure/k8s-manifests
+
+    # Optional Helm / Kustomize overrides — omit for plain YAML
+    # kustomize:
+    #   images:
+    #     - your-registry/sql-inference-api:v1.0.0
+
+  # ── Destination: target cluster and namespace ──────────────────────────────
+  destination:
+    # 'https://kubernetes.default.svc' = the cluster where ArgoCD is running.
+    # Replace with the API server URL for remote clusters.
+    server: https://kubernetes.default.svc
+    namespace: llmops
+
+  # ── Sync policy ────────────────────────────────────────────────────────────
+  syncPolicy:
+    # Automated sync: ArgoCD polls the repo every 3 minutes (default) and
+    # applies any diffs automatically.
+    automated:
+      prune: true      # Delete resources removed from Git
+      selfHeal: true   # Re-apply if someone manually edits the cluster
+
+    syncOptions:
+      - CreateNamespace=true          # Create 'llmops' if it doesn't exist
+      - PruneLast=true                # Delete old resources after new ones are healthy
+      - ApplyOutOfSyncOnly=true       # Only sync changed resources (faster)
+      - RespectIgnoreDifferences=true
+
+    # Retry on transient failures (e.g., network blips)
+    retry:
+      limit: 5
+      backoff:
+        duration: 5s
+        factor: 2
+        maxDuration: 3m
+
+  # ── Resource health checks ─────────────────────────────────────────────────
+  # Tell ArgoCD which resources to watch for health status.
+  # Built-in health checks cover Deployments, Services, etc. automatically.
+
+  # ── Ignore differences ─────────────────────────────────────────────────────
+  # Prevent ArgoCD from reverting fields managed externally (e.g., HPA replicas).
+  ignoreDifferences:
+    - group: apps
+      kind: Deployment
+      jsonPointers:
+        - /spec/replicas    # Managed by HPA — don't override
+    - group: autoscaling
+      kind: HorizontalPodAutoscaler
+      jsonPointers:
+        - /spec/minReplicas
+        - /spec/maxReplicas
+
+  # ── Revision history ───────────────────────────────────────────────────────
+  revisionHistoryLimit: 10    # Keep last 10 successful syncs for rollback
+
+---
+# ────────────────────────────────────────────────────────────────────────────────
+# ArgoCD AppProject — optional: scope permissions for the LLMOps app
+# Uncomment and apply separately if you want fine-grained RBAC.
+# ────────────────────────────────────────────────────────────────────────────────
+# apiVersion: argoproj.io/v1alpha1
+# kind: AppProject
+# metadata:
+#   name: llmops
+#   namespace: argocd
+# spec:
+#   description: LLMOps pipeline project
+#   sourceRepos:
+#     - https://github.com/your-org/sql-llmops-pipeline.git
+#   destinations:
+#     - namespace: llmops
+#       server: https://kubernetes.default.svc
+#   clusterResourceWhitelist:
+#     - group: "*"
+#       kind: Namespace
+#   namespaceResourceWhitelist:
+#     - group: "apps"
+#       kind: Deployment
+#     - group: ""
+#       kind: Service
+#     - group: "networking.k8s.io"
+#       kind: Ingress
+#     - group: "autoscaling"
+#       kind: HorizontalPodAutoscaler

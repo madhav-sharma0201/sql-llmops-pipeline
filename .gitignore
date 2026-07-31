@@ -1,0 +1,60 @@
+# Byte-compiled / optimised Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# ── Training artefacts ───────────────────────────────────────────────────────
+# 1-model-training/adapter_weights/ (Include lightweight 113MB LoRA weights for cloud deployment)
+1-model-training/results/
+1-model-training/mlruns/
+1-model-training/runs/
+*.ckpt
+*.safetensors
+*.bin
+
+# ── Environment files ────────────────────────────────────────────────────────
+.env
+**/.env
+!**/.env.example
+
+# ── Terraform state (never commit!) ──────────────────────────────────────────
+3-infrastructure/terraform/.terraform/
+3-infrastructure/terraform/*.tfstate
+3-infrastructure/terraform/*.tfstate.backup
+3-infrastructure/terraform/*.tfplan
+3-infrastructure/terraform/crash.log
+3-infrastructure/terraform/override.tf
+3-infrastructure/terraform/override.tf.json
+3-infrastructure/terraform/*_override.tf
+3-infrastructure/terraform/*_override.tf.json
+3-infrastructure/terraform/.terraform.lock.hcl
+
+# ── Docker ───────────────────────────────────────────────────────────────────
+.dockerignore
+
+# ── IDE / OS ──────────────────────────────────────────────────────────────────
+.idea/
+.vscode/
+*.DS_Store
+*.swp
+*.swo
+.cursor/
+
+# ── Logs ────────────────────────────────────────────────────────────────────
+*.log
+logs/
+
+# ── Jupyter ─────────────────────────────────────────────────────────────────
+.ipynb_checkpoints/
+*.ipynb_checkpoint
+
+# ── HuggingFace cache ────────────────────────────────────────────────────────
+~/.cache/huggingface/
