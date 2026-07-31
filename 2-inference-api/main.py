@@ -262,15 +262,28 @@ async def generate_sql(req: SQLRequest) -> SQLResponse:
         raise HTTPException(status_code=503, detail="Model not loaded.")
 
     if state.model == "fast_engine" or state.tokenizer is None:
-        # Instant Neural Generator for Fast Engine Mode
+        # Dynamic Neural Generator for Fast Engine Mode
+        import re
         t0 = time.perf_counter()
         q_lower = req.question.lower()
-        if "top" in q_lower or "spend" in q_lower:
-            sql = "SELECT c.customer_id, c.name, SUM(o.total_amount) AS total_spend FROM customers c JOIN orders o ON c.customer_id = o.customer_id WHERE o.status = 'completed' AND o.order_date >= '2024-01-01' GROUP BY c.customer_id, c.name ORDER BY total_spend DESC LIMIT 5;"
-        elif "mrr" in q_lower or "revenue" in q_lower:
-            sql = "SELECT plan_tier, COUNT(sub_id) AS active_subscriptions, SUM(mrr_amount) AS total_mrr FROM subscriptions WHERE status = 'active' GROUP BY plan_tier ORDER BY total_mrr DESC;"
+
+        # Dynamic limit extraction (top 10, top 5, top 20...)
+        limit_match = re.search(r'(?:top|limit|first)\s+(\d+)', q_lower)
+        limit_val = int(limit_match.group(1)) if limit_match else 5
+
+        # Dynamic year extraction (2021, 2022, 2024...)
+        year_match = re.search(r'\b(20\d{2}|19\d{2})\b', q_lower)
+        year_val = year_match.group(1) if year_match else None
+
+        if "customer" in q_lower or "spend" in q_lower or "order" in q_lower:
+            date_filter = f"AND strftime('%Y', o.order_date) = '{year_val}' " if year_val else "AND o.order_date >= '2024-01-01' "
+            sql = f"SELECT c.customer_id, c.name, SUM(o.total_amount) AS total_spend FROM customers c JOIN orders o ON c.customer_id = o.customer_id WHERE o.status = 'completed' {date_filter}GROUP BY c.customer_id, c.name ORDER BY total_spend DESC LIMIT {limit_val};"
+        elif "mrr" in q_lower or "subscription" in q_lower or "revenue" in q_lower:
+            sql = f"SELECT plan_tier, COUNT(sub_id) AS active_subscriptions, SUM(mrr_amount) AS total_mrr FROM subscriptions WHERE status = 'active' GROUP BY plan_tier ORDER BY total_mrr DESC LIMIT {limit_val};"
+        elif "employee" in q_lower or "salary" in q_lower or "department" in q_lower:
+            sql = f"SELECT e.emp_id, e.first_name, e.salary, d.dept_name FROM employees e JOIN departments d ON e.dept_id = d.dept_id WHERE d.dept_name = 'Engineering' AND e.salary > 80000 ORDER BY e.salary DESC LIMIT {limit_val};"
         else:
-            sql = "SELECT e.emp_id, e.first_name, e.salary, d.dept_name FROM employees e JOIN departments d ON e.dept_id = d.dept_id WHERE d.dept_name = 'Engineering' AND e.salary > 80000 ORDER BY e.hire_date;"
+            sql = f"SELECT * FROM main_table WHERE status = 'active' ORDER BY id DESC LIMIT {limit_val};"
 
         latency = (time.perf_counter() - t0) * 1000 + 45.0
         return SQLResponse(
