@@ -296,13 +296,45 @@ async def generate_sql(req: SQLRequest) -> SQLResponse:
         gt_match = re.search(r'(?:over|above|>|greater than|higher than)\s+(\d+(?:\.\d+)?)', q_lower)
         lt_match = re.search(r'(?:below|under|<|less than|lower than)\s+(\d+(?:\.\d+)?)', q_lower)
 
-        def categorize_cols(cols):
-            id_col = next((c for c in cols if c.lower().endswith('_id') or c.lower() == 'id'), cols[0] if cols else 'id')
-            name_col = next((c for c in cols if any(k in c.lower() for k in ('name', 'title', 'username', 'doctor', 'driver', 'instructor', 'city', 'airline'))), None)
-            num_col = next((c for c in cols if any(k in c.lower() for k in ('amount', 'spend', 'salary', 'fee', 'price', 'quantity', 'stock', 'mrr', 'balance', 'rating', 'points', 'distance', 'val', 'cost', 'xp', 'pages', 'cgpa', 'gpa', 'age', 'score', 'marks', 'grade'))), None)
-            cat_col = next((c for c in cols if any(k in c.lower() for k in ('country', 'category', 'dept', 'tier', 'specialty', 'genre', 'type', 'status', 'location', 'state', 'course'))), None)
+        # Universal Column-Aware Where Clause Builder
+        def build_dynamic_where(cols, q_lower, gt_match, lt_match, year_val):
+            where_clauses = []
+            
+            # 1. Match ANY numeric column explicitly present in prompt
+            for col in cols:
+                col_l = col.lower()
+                if col_l in q_lower:
+                    col_gt = re.search(r'\b' + col_l + r'\b\s*(?:is\s*)?(?:over|above|>|greater than|higher than)\s+(\d+(?:\.\d+)?)', q_lower)
+                    col_lt = re.search(r'\b' + col_l + r'\b\s*(?:is\s*)?(?:below|under|<|less than|lower than)\s+(\d+(?:\.\d+)?)', q_lower)
+                    col_eq = re.search(r'\b' + col_l + r'\b\s*(?:is\s*|=)\s+(\d+(?:\.\d+)?)', q_lower)
+                    
+                    if col_gt:
+                        where_clauses.append(f"{col} > {col_gt.group(1)}")
+                    elif col_lt:
+                        where_clauses.append(f"{col} < {col_lt.group(1)}")
+                    elif col_eq:
+                        where_clauses.append(f"{col} = {col_eq.group(1)}")
+                        
+            # 2. General GT / LT fallback on detected numeric column
+            if not where_clauses:
+                num_col = next((c for c in cols if any(k in c.lower() for k in ('amount', 'spend', 'salary', 'fee', 'price', 'quantity', 'stock', 'mrr', 'balance', 'rating', 'points', 'distance', 'val', 'cost', 'xp', 'pages', 'cgpa', 'gpa', 'age', 'score', 'marks', 'grade'))), None)
+                if gt_match and num_col:
+                    where_clauses.append(f"{num_col} > {gt_match.group(1)}")
+                elif lt_match and num_col:
+                    where_clauses.append(f"{num_col} < {lt_match.group(1)}")
+                    
+            # 3. Date / Year Filter
             date_col = next((c for c in cols if any(k in c.lower() for k in ('date', 'time', 'year', 'hire', 'start'))), None)
-            return id_col, name_col, num_col, cat_col, date_col
+            if year_val and date_col:
+                where_clauses.append(f"strftime('%Y', {date_col}) = '{year_val}'")
+                
+            # 4. Status Filter
+            if "completed" in q_lower and any('status' in c.lower() for c in cols):
+                where_clauses.append("status = 'completed'")
+            elif "active" in q_lower and any('status' in c.lower() for c in cols):
+                where_clauses.append("status = 'active'")
+                
+            return ("WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
 
         if not schema_map:
             sql = f"SELECT * FROM data_table LIMIT {limit_val or 10};"
@@ -313,29 +345,7 @@ async def generate_sql(req: SQLRequest) -> SQLResponse:
             tbl_real, cols = schema_map[tbl_key]
             id_col, name_col, num_col, cat_col, date_col = categorize_cols(cols)
 
-            where_clauses = []
-            if year_val and date_col:
-                where_clauses.append(f"strftime('%Y', {date_col}) = '{year_val}'")
-            if gt_match and num_col:
-                where_clauses.append(f"{num_col} > {gt_match.group(1)}")
-            elif lt_match and num_col:
-                where_clauses.append(f"{num_col} < {lt_match.group(1)}")
-
-            cat_val = None
-            if "electronics" in q_lower: cat_val = "Electronics"
-            elif "engineering" in q_lower: cat_val = "Engineering"
-            elif "miami" in q_lower: cat_val = "Miami"
-            elif "japan" in q_lower: cat_val = "Japan"
-            elif "germany" in q_lower: cat_val = "Germany"
-
-            if cat_val and cat_col:
-                where_clauses.append(f"{cat_col} = '{cat_val}'")
-            elif "completed" in q_lower and 'status' in [c.lower() for c in cols]:
-                where_clauses.append("status = 'completed'")
-            elif "active" in q_lower and 'status' in [c.lower() for c in cols]:
-                where_clauses.append("status = 'active'")
-
-            where_str = ("WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
+            where_str = build_dynamic_where(cols, q_lower, gt_match, lt_match, year_val)
 
             if ("sum" in q_lower or "total" in q_lower or "spent" in q_lower or "revenue" in q_lower) and num_col and (cat_col or name_col):
                 group_c = cat_col or name_col
