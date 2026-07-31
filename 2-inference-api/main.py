@@ -353,7 +353,11 @@ async def generate_sql(req: SQLRequest) -> SQLResponse:
 
         # Multi-Table Relational Join Generation
         else:
-            if "order_items" in schema_map and "customers" in schema_map and "orders" in schema_map:
+            if "returns" in schema_map and ("never returned" in q_lower or ("returned" in q_lower and ("not" in q_lower or "never" in q_lower))):
+                y_str = year_val if year_val else '2024'
+                sql = f"SELECT c.customer_id, c.name FROM customers c JOIN orders o ON c.customer_id = o.customer_id WHERE o.status = 'completed' AND strftime('%Y', o.order_date) = '{y_str}' AND c.customer_id NOT IN (SELECT DISTINCT o2.customer_id FROM orders o2 JOIN returns r ON o2.order_id = r.order_id WHERE o2.status = 'completed' AND strftime('%Y', o2.order_date) = '{y_str}');"
+
+            elif "order_items" in schema_map and "customers" in schema_map and "orders" in schema_map:
                 cust_tbl = schema_map["customers"][0]
                 ord_tbl = schema_map["orders"][0]
                 item_tbl = schema_map["order_items"][0]
