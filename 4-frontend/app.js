@@ -206,7 +206,14 @@ document.addEventListener("DOMContentLoaded", () => {
     function generateMockSql(presetKey, question) {
         const qLower = question.toLowerCase();
 
-        // 1. Anti-Join Returns Query (Never returned any product in 2024)
+        // CGPA / GPA Student Queries
+        if (qLower.includes("cgpa") || qLower.includes("gpa")) {
+            const numMatch = qLower.match(/(?:greater than|above|>|over)\s+(\d+(?:\.\d+)?)/);
+            const val = numMatch ? numMatch[1] : "8.0";
+            return `SELECT student_id, name, course, cgpa\nFROM students\nWHERE cgpa > ${val}\nORDER BY cgpa DESC;`;
+        }
+
+        // Anti-Join Returns Query (Never returned any product in 2024)
         if (qLower.includes("never returned") || (qLower.includes("returned") && (qLower.includes("not") || qLower.includes("never")))) {
             return `SELECT c.customer_id, c.name\nFROM customers c\nJOIN orders o ON c.customer_id = o.customer_id\nWHERE o.status = 'completed' AND strftime('%Y', o.order_date) = '2024'\n  AND c.customer_id NOT IN (\n    SELECT DISTINCT o2.customer_id\n    FROM orders o2\n    JOIN returns r ON o2.order_id = r.order_id\n    WHERE o2.status = 'completed' AND strftime('%Y', o2.order_date) = '2024'\n  );`;
         }

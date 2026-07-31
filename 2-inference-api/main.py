@@ -293,14 +293,14 @@ async def generate_sql(req: SQLRequest) -> SQLResponse:
         year_match = re.search(r'\b(20\d{2}|19\d{2})\b', q_lower)
         year_val = year_match.group(1) if year_match else None
 
-        gt_match = re.search(r'(?:over|above|>|greater than)\s+(\d+)', q_lower)
-        lt_match = re.search(r'(?:below|under|<|less than)\s+(\d+)', q_lower)
+        gt_match = re.search(r'(?:over|above|>|greater than|higher than)\s+(\d+(?:\.\d+)?)', q_lower)
+        lt_match = re.search(r'(?:below|under|<|less than|lower than)\s+(\d+(?:\.\d+)?)', q_lower)
 
         def categorize_cols(cols):
             id_col = next((c for c in cols if c.lower().endswith('_id') or c.lower() == 'id'), cols[0] if cols else 'id')
             name_col = next((c for c in cols if any(k in c.lower() for k in ('name', 'title', 'username', 'doctor', 'driver', 'instructor', 'city', 'airline'))), None)
-            num_col = next((c for c in cols if any(k in c.lower() for k in ('amount', 'spend', 'salary', 'fee', 'price', 'quantity', 'stock', 'mrr', 'balance', 'rating', 'points', 'distance', 'val', 'cost', 'xp', 'pages'))), None)
-            cat_col = next((c for c in cols if any(k in c.lower() for k in ('country', 'category', 'dept', 'tier', 'specialty', 'genre', 'type', 'status', 'location', 'state'))), None)
+            num_col = next((c for c in cols if any(k in c.lower() for k in ('amount', 'spend', 'salary', 'fee', 'price', 'quantity', 'stock', 'mrr', 'balance', 'rating', 'points', 'distance', 'val', 'cost', 'xp', 'pages', 'cgpa', 'gpa', 'age', 'score', 'marks', 'grade'))), None)
+            cat_col = next((c for c in cols if any(k in c.lower() for k in ('country', 'category', 'dept', 'tier', 'specialty', 'genre', 'type', 'status', 'location', 'state', 'course'))), None)
             date_col = next((c for c in cols if any(k in c.lower() for k in ('date', 'time', 'year', 'hire', 'start'))), None)
             return id_col, name_col, num_col, cat_col, date_col
 
