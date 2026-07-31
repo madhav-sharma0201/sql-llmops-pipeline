@@ -269,17 +269,22 @@ async def generate_sql(req: SQLRequest) -> SQLResponse:
         schema_raw = req.schema_context
 
         # 1. Parse all tables and columns from DDL schema
-        tables = re.findall(r'CREATE\s+TABLE\s+([a-zA-Z0-9_]+)\s*\(([^;]+)\)', schema_raw, re.IGNORECASE)
+        tables = re.findall(r'CREATE\s+TABLE\s+([a-zA-Z0-9_]+)\s*\((.*?)\);', schema_raw, re.IGNORECASE | re.DOTALL)
+        if not tables:
+            tables = re.findall(r'CREATE\s+TABLE\s+([a-zA-Z0-9_]+)\s*\(([^;]+)\)', schema_raw, re.IGNORECASE)
+        
         schema_map = {}
         for tbl_name, col_block in tables:
-            col_names = []
-            for line in col_block.split(','):
-                line = line.strip()
-                if line and not line.upper().startswith(('PRIMARY', 'FOREIGN', 'CONSTRAINT', 'KEY')):
-                    parts = line.split()
-                    if parts:
-                        col_names.append(parts[0].replace('`', '').replace('"', ''))
-            schema_map[tbl_name.lower()] = (tbl_name, col_names)
+            # Extract column names before data types (handles DECIMAL(10,2) cleanly)
+            cols_found = re.findall(r'^\s*([a-zA-Z_][a-zA-Z0-9_]*)\s+(?:INT|INTEGER|VARCHAR|TEXT|DECIMAL|FLOAT|NUMERIC|DATE|TIMESTAMP|BOOLEAN)', col_block, re.IGNORECASE | re.MULTILINE)
+            if not cols_found:
+                # Fallback parser ignoring keywords
+                raw_tokens = re.findall(r'\b([a-zA-Z_][a-zA-Z0-9_]*)\b', col_block)
+                cols_found = [t for t in raw_tokens if t.upper() not in ('CREATE', 'TABLE', 'PRIMARY', 'KEY', 'FOREIGN', 'CONSTRAINT', 'INT', 'VARCHAR', 'DECIMAL', 'DATE', 'TEXT', 'NULL', 'DEFAULT')]
+            
+            # Deduplicate while preserving order
+            clean_cols = list(dict.fromkeys(cols_found))
+            schema_map[tbl_name.lower()] = (tbl_name, clean_cols)
 
         # 2. Extract Query Entities (limits, years, numerical thresholds)
         limit_match = re.search(r'(?:top|limit|first)\s+(\d+)', q_lower)
