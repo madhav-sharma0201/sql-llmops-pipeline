@@ -202,51 +202,166 @@ document.addEventListener("DOMContentLoaded", () => {
         }
     });
 
-    // Smart Mock SQL Generator Logic (Client-side fallback)
+    // Smart Schema-Driven SQL Generator (Client-side fallback)
     function generateMockSql(presetKey, question) {
         const qLower = question.toLowerCase();
         const schemaText = document.getElementById("schemaInput").value || "";
-        
-        // Dynamic Table Name Extraction from schema
-        const tblMatch = schemaText.match(/CREATE\s+TABLE\s+([a-zA-Z0-9_]+)/i);
-        const tblName = tblMatch ? tblMatch[1] : "employees";
-        
-        // Dynamic Limit Extraction
-        const limitMatch = qLower.match(/(?:top|limit|first|\b)(\d+)/);
-        const limitVal = limitMatch ? limitMatch[1] : "5";
 
-        // Highest Paid / Salary / Employees Queries
-        if (qLower.includes("highest-paid") || qLower.includes("highest paid") || qLower.includes("salary")) {
-            return `SELECT employee_id, name, department, salary\nFROM ${tblName}\nORDER BY salary DESC\nLIMIT ${limitVal};`;
+        // Parse DDL: extract tables and columns
+        const tableBlocks = [...schemaText.matchAll(/CREATE\s+TABLE\s+(\w+)\s*\(([^;]+)\)/gi)];
+        const schema = {};
+        for (const [, tblName, body] of tableBlocks) {
+            const cols = [...body.matchAll(/^\s*(\w+)\s+(?:INT|INTEGER|BIGINT|VARCHAR|CHAR|TEXT|DECIMAL|NUMERIC|FLOAT|DOUBLE|REAL|DATE|DATETIME|TIMESTAMP|BOOLEAN|SERIAL)/gim)]
+                .map(m => m[1]);
+            schema[tblName.toLowerCase()] = { name: tblName, cols };
         }
 
-        // CGPA / GPA Student Queries
-        if (qLower.includes("cgpa") || qLower.includes("gpa")) {
-            const numMatch = qLower.match(/(?:greater than|above|>|over)\s+(\d+(?:\.\d+)?)/);
-            const val = numMatch ? numMatch[1] : "8.0";
-            return `SELECT student_id, name, course, cgpa\nFROM ${tblName}\nWHERE cgpa > ${val}\nORDER BY cgpa DESC;`;
-        }
+        const tables = Object.values(schema);
+        if (tables.length === 0) return `SELECT * FROM data_table LIMIT 10;`;
 
-        // Anti-Join Returns Query (Never returned any product in 2024)
-        if (qLower.includes("never returned") || (qLower.includes("returned") && (qLower.includes("not") || qLower.includes("never")))) {
-            return `SELECT c.customer_id, c.name\nFROM customers c\nJOIN orders o ON c.customer_id = o.customer_id\nWHERE o.status = 'completed' AND strftime('%Y', o.order_date) = '2024'\n  AND c.customer_id NOT IN (\n    SELECT DISTINCT o2.customer_id\n    FROM orders o2\n    JOIN returns r ON o2.order_id = r.order_id\n    WHERE o2.status = 'completed' AND strftime('%Y', o2.order_date) = '2024'\n  );`;
-        }
-        
-        // Discount & Multi-table Spend Queries
-        if (qLower.includes("top 5") || qLower.includes("spend") || qLower.includes("discount")) {
-            if (qLower.includes("discount")) {
-                return `SELECT c.customer_id, c.name, SUM(oi.quantity * oi.unit_price * (1 - oi.discount_percent / 100.0)) AS total_spend, COUNT(DISTINCT o.order_id) AS distinct_orders\nFROM customers c\nJOIN orders o ON c.customer_id = o.customer_id\nJOIN order_items oi ON o.order_id = oi.order_id\nWHERE o.status = 'completed' AND strftime('%Y', o.order_date) = '2024'\nGROUP BY c.customer_id, c.name\nORDER BY total_spend DESC, c.customer_id ASC\nLIMIT 5;`;
+        // Extract query parameters
+        const limitMatch = qLower.match(/(?:top|first|limit)\s+(\d+)/);
+        const limit = limitMatch ? limitMatch[1] : null;
+        const yearMatch = qLower.match(/\b(20\d{2}|19\d{2})\b/);
+        const year = yearMatch ? yearMatch[1] : null;
+        const gtMatch = qLower.match(/(?:over|above|>|greater than|higher than|more than)\s+(\d+(?:\.\d+)?)/);
+        const ltMatch = qLower.match(/(?:below|under|<|less than|lower than)\s+(\d+(?:\.\d+)?)/);
+
+        const hasCompleted = qLower.includes("completed");
+        const hasActive = qLower.includes("active");
+        const wantsAgg = /\b(total|sum|spent|revenue|earnings|calculate|grouped)\b/.test(qLower);
+        const wantsAntiJoin = /\b(never|haven't|have not|did not|didn't|without any)\b/.test(qLower);
+
+        const numTypes = new Set(["INT","INTEGER","BIGINT","DECIMAL","NUMERIC","FLOAT","DOUBLE","REAL","SERIAL"]);
+        const dateTypes = new Set(["DATE","DATETIME","TIMESTAMP"]);
+        const textTypes = new Set(["VARCHAR","CHAR","TEXT"]);
+
+        function classifyCols(tbl) {
+            const rawCols = [...schemaText.matchAll(new RegExp(
+                `CREATE\\s+TABLE\\s+${tbl.name}\\s*\\(([^;]+)\\)`, 'i'
+            ))];
+            if (!rawCols.length) return { id: tbl.cols[0], name: null, num: null, date: null, cat: null };
+            const colBody = rawCols[0][1];
+            let id = null, name = null, num = null, date = null, cat = null;
+            const nameKw = ["name","title","label","username","first_name","last_name","doctor","driver","brand","airline"];
+            const catKw = ["status","type","category","tier","department","dept","country","city","specialty","genre","course","plan","priority","method","role"];
+            for (const col of tbl.cols) {
+                const typeMatch = colBody.match(new RegExp(`\\b${col}\\s+(\\w+)`, 'i'));
+                const dtype = typeMatch ? typeMatch[1].toUpperCase() : "TEXT";
+                const isPk = new RegExp(`\\b${col}\\b[^,]*PRIMARY\\s+KEY`, 'i').test(colBody);
+                if (isPk && !id) id = col;
+                if (nameKw.some(k => col.toLowerCase().includes(k)) && textTypes.has(dtype) && !name) name = col;
+                if (catKw.some(k => col.toLowerCase().includes(k)) && textTypes.has(dtype) && !cat) cat = col;
+                if (numTypes.has(dtype) && !isPk && !col.toLowerCase().endsWith("_id") && !num) num = col;
+                if (dateTypes.has(dtype) && !date) date = col;
             }
-            return `SELECT c.customer_id, c.name AS customer_name, SUM(o.total_amount) AS total_spend, COUNT(o.order_id) AS order_count\nFROM customers c\nJOIN orders o ON c.customer_id = o.customer_id\nWHERE o.status = 'completed' AND strftime('%Y', o.order_date) = '2024'\nGROUP BY c.customer_id, c.name\nORDER BY total_spend DESC\nLIMIT 5;`;
+            return { id: id || tbl.cols[0], name, num, date, cat };
         }
 
-        // SaaS MRR Queries
-        if (qLower.includes("mrr") || qLower.includes("recurring")) {
-            return `SELECT plan_tier, COUNT(sub_id) AS active_subscriptions, SUM(mrr_amount) AS total_mrr\nFROM subscriptions\nWHERE status = 'active'\nGROUP BY plan_tier\nORDER BY total_mrr DESC;`;
+        // Anti-join pattern
+        if (wantsAntiJoin && tables.length >= 2) {
+            const posTbl = tables.find(t => /customer|user|employee|student/.test(t.name.toLowerCase())) || tables[0];
+            const negTbl = tables.find(t => /return|refund|cancel/.test(t.name.toLowerCase())) || tables[tables.length - 1];
+            const bridgeTbl = tables.find(t => /order/.test(t.name.toLowerCase()) && !/item/.test(t.name.toLowerCase()));
+            const pInfo = classifyCols(posTbl);
+            const yearStr = year || "2024";
+            if (bridgeTbl) {
+                const sharedPB = posTbl.cols.find(c => bridgeTbl.cols.includes(c)) || pInfo.id;
+                const sharedBN = bridgeTbl.cols.find(c => negTbl.cols.includes(c)) || bridgeTbl.cols[0];
+                const bInfo = classifyCols(bridgeTbl);
+                let where = [];
+                if (hasCompleted && bInfo.cat) where.push(`o.${bInfo.cat} = 'completed'`);
+                if (year && bInfo.date) where.push(`strftime('%Y', o.${bInfo.date}) = '${yearStr}'`);
+                const whereStr = where.length ? `WHERE ${where.join(" AND ")} ` : "";
+                const subWhere = whereStr.replace(/o\./g, "o2.");
+                return `SELECT c.${pInfo.id}${pInfo.name ? `, c.${pInfo.name}` : ""}\nFROM ${posTbl.name} c\nJOIN ${bridgeTbl.name} o ON c.${sharedPB} = o.${sharedPB}\n${whereStr}AND c.${pInfo.id} NOT IN (\n  SELECT DISTINCT o2.${sharedPB}\n  FROM ${bridgeTbl.name} o2\n  JOIN ${negTbl.name} r ON o2.${sharedBN} = r.${sharedBN}\n  ${subWhere});`;
+            }
         }
 
-        // Default Dynamic Fallback
-        return `SELECT * FROM ${tblName}\nORDER BY 1 DESC\nLIMIT ${limitVal};`;
+        // 3-table ecommerce aggregation
+        if (schema["order_items"] && schema["customers"] && schema["orders"] && wantsAgg) {
+            const oi = schema["order_items"];
+            const qtyCols = oi.cols.filter(c => /quantity|qty/i.test(c));
+            const priceCols = oi.cols.filter(c => /price/i.test(c));
+            const discCols = oi.cols.filter(c => /discount/i.test(c));
+            const qty = qtyCols[0] || "quantity";
+            const price = priceCols[0] || "unit_price";
+            const disc = discCols[0] || "discount_percent";
+            const hasDiscount = qLower.includes("discount");
+            const spendExpr = hasDiscount
+                ? `SUM(oi.${qty} * oi.${price} * (1 - oi.${disc} / 100.0))`
+                : `SUM(oi.${qty} * oi.${price})`;
+            const cInfo = classifyCols(schema["customers"]);
+            const oInfo = classifyCols(schema["orders"]);
+            let where = [];
+            if (hasCompleted) where.push(`o.status = 'completed'`);
+            if (year) where.push(`strftime('%Y', o.order_date) = '${year}'`);
+            const whereStr = where.length ? `\nWHERE ${where.join(" AND ")}` : "";
+            const wantsCount = /distinct|count|number of/i.test(qLower);
+            const countStr = wantsCount ? `,\n  COUNT(DISTINCT o.order_id) AS distinct_orders` : "";
+            const limitStr = limit ? `\nLIMIT ${limit}` : "";
+            return `SELECT c.${cInfo.id}${cInfo.name ? `, c.${cInfo.name}` : ""},\n  ${spendExpr} AS total_spend${countStr}\nFROM customers c\nJOIN orders o ON c.customer_id = o.customer_id\nJOIN order_items oi ON o.order_id = oi.order_id${whereStr}\nGROUP BY c.${cInfo.id}${cInfo.name ? `, c.${cInfo.name}` : ""}\nORDER BY total_spend DESC${limitStr};`;
+        }
+
+        // Single or multi-table
+        const mainTbl = tables[0];
+        const info = classifyCols(mainTbl);
+
+        if (tables.length === 1) {
+            let where = [];
+            // Numeric filters
+            for (const col of mainTbl.cols) {
+                const colL = col.toLowerCase();
+                if (qLower.includes(colL)) {
+                    const gt = qLower.match(new RegExp(`${colL}\\s*(?:is\\s+)?(?:over|above|>|greater than)\\s+(\\d+(?:\\.\\d+)?)`));
+                    const lt = qLower.match(new RegExp(`${colL}\\s*(?:is\\s+)?(?:below|under|<|less than)\\s+(\\d+(?:\\.\\d+)?)`));
+                    if (gt) where.push(`${col} > ${gt[1]}`);
+                    else if (lt) where.push(`${col} < ${lt[1]}`);
+                }
+            }
+            if (!where.length && gtMatch && info.num) where.push(`${info.num} > ${gtMatch[1]}`);
+            if (!where.length && ltMatch && info.num) where.push(`${info.num} < ${ltMatch[1]}`);
+            if (year && info.date) where.push(`strftime('%Y', ${info.date}) = '${year}'`);
+            if (hasCompleted && mainTbl.cols.some(c => c.toLowerCase().includes("status"))) where.push(`status = 'completed'`);
+            if (hasActive && mainTbl.cols.some(c => c.toLowerCase().includes("status"))) where.push(`status = 'active'`);
+            
+            const whereStr = where.length ? `\nWHERE ${where.join(" AND ")}` : "";
+
+            if (wantsAgg && info.num) {
+                const grp = info.name || info.cat || info.id;
+                return `SELECT ${grp}, SUM(${info.num}) AS total_${info.num}\nFROM ${mainTbl.name}${whereStr}\nGROUP BY ${grp}\nORDER BY total_${info.num} DESC${limit ? `\nLIMIT ${limit}` : ""};`;
+            }
+            const selCols = [info.id, info.name, info.cat, info.num, info.date].filter(Boolean);
+            const uniqueCols = [...new Set(selCols)];
+            const orderCol = info.num || info.id;
+            const dir = ltMatch ? "ASC" : "DESC";
+            return `SELECT ${uniqueCols.join(", ")}\nFROM ${mainTbl.name}${whereStr}\nORDER BY ${orderCol} ${dir}${limit ? `\nLIMIT ${limit}` : ""};`;
+        }
+
+        // Default 2-table join
+        const secTbl = tables[1];
+        const secInfo = classifyCols(secTbl);
+        const shared = mainTbl.cols.find(c => secTbl.cols.includes(c));
+        const joinCol = shared || mainTbl.cols[0];
+        const a1 = mainTbl.name[0].toLowerCase();
+        const a2 = secTbl.name[0].toLowerCase() === a1 ? secTbl.name[0].toLowerCase() + "2" : secTbl.name[0].toLowerCase();
+        let where = [];
+        if (hasCompleted && secTbl.cols.some(c => c.toLowerCase().includes("status"))) where.push(`${a2}.status = 'completed'`);
+        if (year && secInfo.date) where.push(`strftime('%Y', ${a2}.${secInfo.date}) = '${year}'`);
+        if (gtMatch && (info.num || secInfo.num)) {
+            const [ta, tc] = info.num ? [a1, info.num] : [a2, secInfo.num];
+            where.push(`${ta}.${tc} > ${gtMatch[1]}`);
+        }
+        const whereStr = where.length ? ` WHERE ${where.join(" AND ")}` : "";
+        const limitStr = limit ? ` LIMIT ${limit}` : "";
+
+        if (wantsAgg) {
+            const numT = secInfo.num || info.num || secTbl.cols[secTbl.cols.length - 1];
+            const numAlias = secInfo.num ? a2 : a1;
+            return `SELECT ${a1}.${info.id}${info.name ? `, ${a1}.${info.name}` : ""}, SUM(${numAlias}.${numT}) AS total_value\nFROM ${mainTbl.name} ${a1}\nJOIN ${secTbl.name} ${a2} ON ${a1}.${joinCol} = ${a2}.${joinCol}${whereStr}\nGROUP BY ${a1}.${info.id}${info.name ? `, ${a1}.${info.name}` : ""}\nORDER BY total_value DESC${limitStr};`;
+        }
+
+        return `SELECT ${a1}.${info.id}${info.name ? `, ${a1}.${info.name}` : ""}${secInfo.num ? `, ${a2}.${secInfo.num}` : ""}\nFROM ${mainTbl.name} ${a1}\nJOIN ${secTbl.name} ${a2} ON ${a1}.${joinCol} = ${a2}.${joinCol}${whereStr}${limitStr};`;
     }
 
     // Render Results
