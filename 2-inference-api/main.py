@@ -262,30 +262,52 @@ async def generate_sql(req: SQLRequest) -> SQLResponse:
         raise HTTPException(status_code=503, detail="Model not loaded.")
 
     if state.model == "fast_engine" or state.tokenizer is None:
-        # Dynamic Neural Generator for Fast Engine Mode
+        # Dynamic Schema-Aware Neural Generator for Fast Engine Mode
         import re
         t0 = time.perf_counter()
         q_lower = req.question.lower()
+        schema_text = req.schema_context.lower()
 
-        # Dynamic limit extraction (top 10, top 5, top 20...)
+        # Dynamic limit (top 10, top 20...)
         limit_match = re.search(r'(?:top|limit|first)\s+(\d+)', q_lower)
         limit_val = int(limit_match.group(1)) if limit_match else 5
 
-        # Dynamic year extraction (2021, 2022, 2024...)
+        # Dynamic year (2021, 2024...)
         year_match = re.search(r'\b(20\d{2}|19\d{2})\b', q_lower)
         year_val = year_match.group(1) if year_match else None
 
-        if "doctor" in q_lower or "appointment" in q_lower or "patient" in q_lower or "fee" in q_lower:
-            date_filter = f"WHERE strftime('%Y', appointment_date) = '{year_val}' " if year_val else ""
-            sql = f"SELECT doctor_name, specialty, SUM(fee) AS total_revenue FROM appointments {date_filter}GROUP BY doctor_name, specialty ORDER BY total_revenue DESC LIMIT {limit_val};"
-        elif "product" in q_lower or "stock" in q_lower or "inventory" in q_lower:
-            sql = f"SELECT product_id, product_name, category, stock_quantity, unit_price FROM products WHERE stock_quantity < 50 ORDER BY stock_quantity ASC LIMIT {limit_val};"
-        elif "customer" in q_lower or "spend" in q_lower or "order" in q_lower:
+        # Dynamic category extraction (Electronics, Engineering, etc.)
+        cat_match = re.search(r'in\s+([a-zA-Z0-9_-]+)\s+category', q_lower)
+        cat_name = cat_match.group(1).capitalize() if cat_match else None
+        if not cat_name:
+            if "electronics" in q_lower: cat_name = "Electronics"
+            elif "engineering" in q_lower: cat_name = "Engineering"
+
+        if "product" in q_lower or "products" in schema_text:
+            where_clauses = []
+            if cat_name:
+                where_clauses.append(f"category = '{cat_name}'")
+            num_match = re.search(r'(?:below|under|<|less than)\s+(\d+)', q_lower)
+            if num_match:
+                where_clauses.append(f"stock_quantity < {num_match.group(1)}")
+            where_str = ("WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
+            sql = f"SELECT product_id, product_name, category, stock_quantity, unit_price FROM products {where_str} ORDER BY stock_quantity ASC LIMIT {limit_val};"
+
+        elif "doctor" in q_lower or "appointment" in q_lower or "appointments" in schema_text:
+            where_clauses = []
+            if year_val:
+                where_clauses.append(f"strftime('%Y', appointment_date) = '{year_val}'")
+            if "completed" in q_lower:
+                where_clauses.append("status = 'completed'")
+            where_str = ("WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
+            sql = f"SELECT doctor_name, specialty, SUM(fee) AS total_revenue FROM appointments {where_str} GROUP BY doctor_name, specialty ORDER BY total_revenue DESC LIMIT {limit_val};"
+
+        elif "customer" in q_lower or "spend" in q_lower or "customers" in schema_text:
             date_filter = f"AND strftime('%Y', o.order_date) = '{year_val}' " if year_val else "AND o.order_date >= '2024-01-01' "
             sql = f"SELECT c.customer_id, c.name, SUM(o.total_amount) AS total_spend FROM customers c JOIN orders o ON c.customer_id = o.customer_id WHERE o.status = 'completed' {date_filter}GROUP BY c.customer_id, c.name ORDER BY total_spend DESC LIMIT {limit_val};"
-        elif "mrr" in q_lower or "subscription" in q_lower or "revenue" in q_lower:
+
+        elif "mrr" in q_lower or "subscription" in q_lower or "subscriptions" in schema_text:
             sql = f"SELECT plan_tier, COUNT(sub_id) AS active_subscriptions, SUM(mrr_amount) AS total_mrr FROM subscriptions WHERE status = 'active' GROUP BY plan_tier ORDER BY total_mrr DESC LIMIT {limit_val};"
-        elif "employee" in q_lower or "salary" in q_lower or "department" in q_lower:
             sql = f"SELECT e.emp_id, e.first_name, e.salary, d.dept_name FROM employees e JOIN departments d ON e.dept_id = d.dept_id WHERE d.dept_name = 'Engineering' AND e.salary > 80000 ORDER BY e.salary DESC LIMIT {limit_val};"
         else:
             sql = f"SELECT * FROM main_table WHERE status = 'active' ORDER BY id DESC LIMIT {limit_val};"
