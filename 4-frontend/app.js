@@ -344,30 +344,48 @@ document.addEventListener("DOMContentLoaded", () => {
             return `SELECT ${uniqueCols.join(", ")}\nFROM ${mainTbl.name}${whereStr}\nORDER BY ${orderCol} ${dir}${limit ? `\nLIMIT ${limit}` : ""};`;
         }
 
-        // Default 2-table join
-        const secTbl = tables[1];
-        const secInfo = classifyCols(secTbl);
-        const shared = mainTbl.cols.find(c => secTbl.cols.includes(c));
-        const joinCol = shared || mainTbl.cols[0];
-        const a1 = mainTbl.name[0].toLowerCase();
-        const a2 = secTbl.name[0].toLowerCase() === a1 ? secTbl.name[0].toLowerCase() + "2" : secTbl.name[0].toLowerCase();
+        // Multi-table joins (2 or more tables)
+        // Find dimension table mentioned in prompt (e.g. 'courses' for "each course")
+        let dimTbl = tables.find(t => qLower.includes(t.name.toLowerCase().replace(/s$/, ""))) || tables[0];
+        let valTbl = tables.find(t => classifyCols(t).num != null) || tables[tables.length - 1];
+
+        const dimInfo = classifyCols(dimTbl);
+        const valInfo = classifyCols(valTbl);
+
+        // Ensure we only aggregate real numeric columns
+        const numCol = valInfo.num;
+        if (!numCol) {
+            // Fallback for simple join without numeric aggregation
+            const shared = dimTbl.cols.find(c => valTbl.cols.includes(c)) || dimTbl.cols[0];
+            const a1 = dimTbl.name[0].toLowerCase();
+            const a2 = valTbl.name[0].toLowerCase() === a1 ? a1 + "2" : valTbl.name[0].toLowerCase();
+            return `SELECT ${a1}.${dimInfo.id}${dimInfo.name ? `, ${a1}.${dimInfo.name}` : ""}\nFROM ${dimTbl.name} ${a1}\nJOIN ${valTbl.name} ${a2} ON ${a1}.${shared} = ${a2}.${shared}${limit ? `\nLIMIT ${limit}` : ""};`;
+        }
+
+        const isAvg = /average|avg|mean/i.test(qLower);
+        const aggFunc = isAvg ? "AVG" : "SUM";
+        const aggAlias = isAvg ? `avg_${numCol}` : `total_${numCol}`;
+
+        const a1 = dimTbl.name[0].toLowerCase();
+        const a2 = valTbl.name[0].toLowerCase() === a1 ? a1 + "2" : valTbl.name[0].toLowerCase();
+
+        // Find join key between dimension and value table
+        const sharedKey = dimTbl.cols.find(c => valTbl.cols.includes(c)) || `${dimTbl.name.toLowerCase().replace(/s$/, "")}_id`;
+
         let where = [];
-        if (hasCompleted && secTbl.cols.some(c => c.toLowerCase().includes("status"))) where.push(`${a2}.status = 'completed'`);
-        if (year && secInfo.date) where.push(`strftime('%Y', ${a2}.${secInfo.date}) = '${year}'`);
-        if (gtMatch && (info.num || secInfo.num)) {
-            const [ta, tc] = info.num ? [a1, info.num] : [a2, secInfo.num];
-            where.push(`${ta}.${tc} > ${gtMatch[1]}`);
+        if (hasCompleted && (valTbl.cols.includes("status") || dimTbl.cols.includes("status"))) {
+            where.push(`${valTbl.cols.includes("status") ? a2 : a1}.status = 'completed'`);
         }
-        const whereStr = where.length ? ` WHERE ${where.join(" AND ")}` : "";
-        const limitStr = limit ? ` LIMIT ${limit}` : "";
-
-        if (wantsAgg) {
-            const numT = secInfo.num || info.num || secTbl.cols[secTbl.cols.length - 1];
-            const numAlias = secInfo.num ? a2 : a1;
-            return `SELECT ${a1}.${info.id}${info.name ? `, ${a1}.${info.name}` : ""}, SUM(${numAlias}.${numT}) AS total_value\nFROM ${mainTbl.name} ${a1}\nJOIN ${secTbl.name} ${a2} ON ${a1}.${joinCol} = ${a2}.${joinCol}${whereStr}\nGROUP BY ${a1}.${info.id}${info.name ? `, ${a1}.${info.name}` : ""}\nORDER BY total_value DESC${limitStr};`;
+        if (year && (valInfo.date || dimInfo.date)) {
+            const dateCol = valInfo.date || dimInfo.date;
+            const dateAlias = valInfo.date ? a2 : a1;
+            where.push(`strftime('%Y', ${dateAlias}.${dateCol}) = '${year}'`);
         }
+        const whereStr = where.length ? `\nWHERE ${where.join(" AND ")}` : "";
+        const limitStr = limit ? `\nLIMIT ${limit}` : "";
 
-        return `SELECT ${a1}.${info.id}${info.name ? `, ${a1}.${info.name}` : ""}${secInfo.num ? `, ${a2}.${secInfo.num}` : ""}\nFROM ${mainTbl.name} ${a1}\nJOIN ${secTbl.name} ${a2} ON ${a1}.${joinCol} = ${a2}.${joinCol}${whereStr}${limitStr};`;
+        const selectGrp = `${a1}.${dimInfo.id}${dimInfo.name ? `, ${a1}.${dimInfo.name}` : ""}`;
+        return `SELECT ${selectGrp}, ${aggFunc}(${a2}.${numCol}) AS ${aggAlias}\nFROM ${dimTbl.name} ${a1}\nJOIN ${valTbl.name} ${a2} ON ${a1}.${sharedKey} = ${a2}.${sharedKey}${whereStr}\nGROUP BY ${selectGrp}\nORDER BY ${aggAlias} DESC${limitStr};`;
     }
 
     // Render Results
