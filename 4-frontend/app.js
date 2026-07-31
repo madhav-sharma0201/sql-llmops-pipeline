@@ -229,7 +229,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
         const hasCompleted = qLower.includes("completed");
         const hasActive = qLower.includes("active");
-        const wantsAgg = /\b(total|sum|spent|revenue|earnings|calculate|grouped)\b/.test(qLower);
+        const wantsAgg = /\b(total|sum|spent|revenue|earnings|calculate|grouped|average|avg|mean|count)\b/.test(qLower);
         const wantsAntiJoin = /\b(never|haven't|have not|did not|didn't|without any)\b/.test(qLower);
 
         const numTypes = new Set(["INT","INTEGER","BIGINT","DECIMAL","NUMERIC","FLOAT","DOUBLE","REAL","SERIAL"]);
@@ -238,7 +238,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
         function classifyCols(tbl) {
             const rawCols = [...schemaText.matchAll(new RegExp(
-                `CREATE\\s+TABLE\\s+${tbl.name}\\s*\\(([^;]+)\\)`, 'i'
+                `CREATE\\s+TABLE\\s+${tbl.name}\\s*\\(([^;]+)\\)`, 'gi'
             ))];
             if (!rawCols.length) return { id: tbl.cols[0], name: null, num: null, date: null, cat: null };
             const colBody = rawCols[0][1];
@@ -328,8 +328,14 @@ document.addEventListener("DOMContentLoaded", () => {
             const whereStr = where.length ? `\nWHERE ${where.join(" AND ")}` : "";
 
             if (wantsAgg && info.num) {
-                const grp = info.name || info.cat || info.id;
-                return `SELECT ${grp}, SUM(${info.num}) AS total_${info.num}\nFROM ${mainTbl.name}${whereStr}\nGROUP BY ${grp}\nORDER BY total_${info.num} DESC${limit ? `\nLIMIT ${limit}` : ""};`;
+                const isAvg = /average|avg|mean/i.test(qLower);
+                const aggFunc = isAvg ? "AVG" : "SUM";
+                const aggAlias = isAvg ? `avg_${info.num}` : `total_${info.num}`;
+                const mentionedGrp = mainTbl.cols.find(c => {
+                    const base = c.toLowerCase().replace("_id", "");
+                    return base.length >= 2 && new RegExp(`\\b(each|per|by|every)?\\s*${base}\\b`, "i").test(qLower);
+                }) || info.name || info.cat || info.id;
+                return `SELECT ${mentionedGrp}, ${aggFunc}(${info.num}) AS ${aggAlias}\nFROM ${mainTbl.name}${whereStr}\nGROUP BY ${mentionedGrp}\nORDER BY ${aggAlias} DESC${limit ? `\nLIMIT ${limit}` : ""};`;
             }
             const selCols = [info.id, info.name, info.cat, info.num, info.date].filter(Boolean);
             const uniqueCols = [...new Set(selCols)];

@@ -365,12 +365,12 @@ def extract_intent(question: str, schema: Dict[str, Table]) -> QueryIntent:
             # "grouped by plan_tier" — this is GROUP BY, aggregation should still apply
             intent.group_by_hint = matched_col.name
 
-    if not by_col_is_numeric and any(w in q for w in ('total', 'sum', 'spent', 'revenue', 'earnings', 'collected', 'calculate', 'grouped')):
-        intent.wants_aggregation = True
-        intent.agg_type = 'sum'
-    elif 'average' in q or 'avg' in q or 'mean' in q:
+    if 'average' in q or 'avg' in q or 'mean' in q:
         intent.wants_aggregation = True
         intent.agg_type = 'avg'
+    elif not by_col_is_numeric and any(w in q for w in ('total', 'sum', 'spent', 'revenue', 'earnings', 'collected', 'calculate', 'grouped')):
+        intent.wants_aggregation = True
+        intent.agg_type = 'sum'
     elif re.search(r'\bcount\b', q):
         intent.wants_aggregation = True
         intent.agg_type = 'count'
@@ -600,10 +600,27 @@ def _generate_single_table(table: Table, intent: QueryIntent, q_lower: str, sche
                 agg_col = nc
                 break
 
-        # Use group_by_hint if available, else prefer name, then category
+        # Check if any column is explicitly mentioned for grouping ("each course", "per department", "by student_id")
+        mentioned_group_col = None
+        for col in table.columns:
+            base_name = col.name.lower().replace('_id', '').replace('_name', '')
+            if len(base_name) >= 2 and re.search(r'\b(?:each|per|by|every)\s+' + re.escape(base_name) + r'\b', q_lower):
+                mentioned_group_col = col
+                break
+        if not mentioned_group_col:
+            for col in table.columns:
+                if col.is_pk or col.is_fk:
+                    continue  # Skip IDs for general keyword match
+                base_name = col.name.lower().replace('_id', '').replace('_name', '')
+                if len(base_name) >= 3 and base_name in q_lower and col.name.lower() != agg_col.name.lower():
+                    mentioned_group_col = col
+                    break
+
         if intent.group_by_hint:
             group_col_obj = table.get_col(intent.group_by_hint)
             group_col = group_col_obj if group_col_obj else (classified['name'] if classified['name'] else None)
+        elif mentioned_group_col:
+            group_col = mentioned_group_col
         else:
             group_col = classified['name'] if classified['name'] else (classified['category'][0] if classified['category'] else None)
 
