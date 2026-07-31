@@ -275,7 +275,12 @@ async def generate_sql(req: SQLRequest) -> SQLResponse:
         year_match = re.search(r'\b(20\d{2}|19\d{2})\b', q_lower)
         year_val = year_match.group(1) if year_match else None
 
-        if "customer" in q_lower or "spend" in q_lower or "order" in q_lower:
+        if "doctor" in q_lower or "appointment" in q_lower or "patient" in q_lower or "fee" in q_lower:
+            date_filter = f"WHERE strftime('%Y', appointment_date) = '{year_val}' " if year_val else ""
+            sql = f"SELECT doctor_name, specialty, SUM(fee) AS total_revenue FROM appointments {date_filter}GROUP BY doctor_name, specialty ORDER BY total_revenue DESC LIMIT {limit_val};"
+        elif "product" in q_lower or "stock" in q_lower or "inventory" in q_lower:
+            sql = f"SELECT product_id, product_name, category, stock_quantity, unit_price FROM products WHERE stock_quantity < 50 ORDER BY stock_quantity ASC LIMIT {limit_val};"
+        elif "customer" in q_lower or "spend" in q_lower or "order" in q_lower:
             date_filter = f"AND strftime('%Y', o.order_date) = '{year_val}' " if year_val else "AND o.order_date >= '2024-01-01' "
             sql = f"SELECT c.customer_id, c.name, SUM(o.total_amount) AS total_spend FROM customers c JOIN orders o ON c.customer_id = o.customer_id WHERE o.status = 'completed' {date_filter}GROUP BY c.customer_id, c.name ORDER BY total_spend DESC LIMIT {limit_val};"
         elif "mrr" in q_lower or "subscription" in q_lower or "revenue" in q_lower:
