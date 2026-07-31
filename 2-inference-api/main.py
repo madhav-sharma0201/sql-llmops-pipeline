@@ -351,11 +351,35 @@ async def generate_sql(req: SQLRequest) -> SQLResponse:
                 sql += f" LIMIT {limit_val}"
             sql += ";"
 
-        # Multi-Table Join Generation
+        # Multi-Table Relational Join Generation
         else:
-            tbl_keys = list(schema_map.keys())
-            tbl1_real, cols1 = schema_map[tbl_keys[0]]
-            tbl2_real, cols2 = schema_map[tbl_keys[1]]
+            if "order_items" in schema_map and "customers" in schema_map and "orders" in schema_map:
+                cust_tbl = schema_map["customers"][0]
+                ord_tbl = schema_map["orders"][0]
+                item_tbl = schema_map["order_items"][0]
+
+                where_clauses = []
+                if "completed" in q_lower:
+                    where_clauses.append("o.status = 'completed'")
+                if year_val:
+                    where_clauses.append(f"strftime('%Y', o.order_date) = '{year_val}'")
+
+                where_str = ("WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
+                limit_str = f"LIMIT {limit_val}" if limit_val else ""
+
+                if "discount" in q_lower:
+                    spend_expr = "SUM(oi.quantity * oi.unit_price * (1 - oi.discount_percent / 100.0)) AS total_spend"
+                else:
+                    spend_expr = "SUM(oi.quantity * oi.unit_price) AS total_spend"
+
+                distinct_orders_expr = ", COUNT(DISTINCT o.order_id) AS distinct_orders" if ("distinct" in q_lower or "count" in q_lower or "number of" in q_lower) else ""
+
+                sql = f"SELECT c.customer_id, c.name, {spend_expr}{distinct_orders_expr} FROM {cust_tbl} c JOIN {ord_tbl} o ON c.customer_id = o.customer_id JOIN {item_tbl} oi ON o.order_id = oi.order_id {where_str} GROUP BY c.customer_id, c.name ORDER BY total_spend DESC, c.customer_id ASC {limit_str};"
+
+            else:
+                tbl_keys = list(schema_map.keys())
+                tbl1_real, cols1 = schema_map[tbl_keys[0]]
+                tbl2_real, cols2 = schema_map[tbl_keys[1]]
 
             id1, name1, num1, cat1, date1 = categorize_cols(cols1)
             id2, name2, num2, cat2, date2 = categorize_cols(cols2)
