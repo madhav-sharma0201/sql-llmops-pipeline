@@ -205,12 +205,26 @@ document.addEventListener("DOMContentLoaded", () => {
     // Smart Mock SQL Generator Logic (Client-side fallback)
     function generateMockSql(presetKey, question) {
         const qLower = question.toLowerCase();
+        const schemaText = document.getElementById("schemaInput").value || "";
+        
+        // Dynamic Table Name Extraction from schema
+        const tblMatch = schemaText.match(/CREATE\s+TABLE\s+([a-zA-Z0-9_]+)/i);
+        const tblName = tblMatch ? tblMatch[1] : "employees";
+        
+        // Dynamic Limit Extraction
+        const limitMatch = qLower.match(/(?:top|limit|first|\b)(\d+)/);
+        const limitVal = limitMatch ? limitMatch[1] : "5";
+
+        // Highest Paid / Salary / Employees Queries
+        if (qLower.includes("highest-paid") || qLower.includes("highest paid") || qLower.includes("salary")) {
+            return `SELECT employee_id, name, department, salary\nFROM ${tblName}\nORDER BY salary DESC\nLIMIT ${limitVal};`;
+        }
 
         // CGPA / GPA Student Queries
         if (qLower.includes("cgpa") || qLower.includes("gpa")) {
             const numMatch = qLower.match(/(?:greater than|above|>|over)\s+(\d+(?:\.\d+)?)/);
             const val = numMatch ? numMatch[1] : "8.0";
-            return `SELECT student_id, name, course, cgpa\nFROM students\nWHERE cgpa > ${val}\nORDER BY cgpa DESC;`;
+            return `SELECT student_id, name, course, cgpa\nFROM ${tblName}\nWHERE cgpa > ${val}\nORDER BY cgpa DESC;`;
         }
 
         // Anti-Join Returns Query (Never returned any product in 2024)
@@ -218,26 +232,21 @@ document.addEventListener("DOMContentLoaded", () => {
             return `SELECT c.customer_id, c.name\nFROM customers c\nJOIN orders o ON c.customer_id = o.customer_id\nWHERE o.status = 'completed' AND strftime('%Y', o.order_date) = '2024'\n  AND c.customer_id NOT IN (\n    SELECT DISTINCT o2.customer_id\n    FROM orders o2\n    JOIN returns r ON o2.order_id = r.order_id\n    WHERE o2.status = 'completed' AND strftime('%Y', o2.order_date) = '2024'\n  );`;
         }
         
-        // 2. Discount & Multi-table Spend Queries
+        // Discount & Multi-table Spend Queries
         if (qLower.includes("top 5") || qLower.includes("spend") || qLower.includes("discount")) {
             if (qLower.includes("discount")) {
                 return `SELECT c.customer_id, c.name, SUM(oi.quantity * oi.unit_price * (1 - oi.discount_percent / 100.0)) AS total_spend, COUNT(DISTINCT o.order_id) AS distinct_orders\nFROM customers c\nJOIN orders o ON c.customer_id = o.customer_id\nJOIN order_items oi ON o.order_id = oi.order_id\nWHERE o.status = 'completed' AND strftime('%Y', o.order_date) = '2024'\nGROUP BY c.customer_id, c.name\nORDER BY total_spend DESC, c.customer_id ASC\nLIMIT 5;`;
             }
             return `SELECT c.customer_id, c.name AS customer_name, SUM(o.total_amount) AS total_spend, COUNT(o.order_id) AS order_count\nFROM customers c\nJOIN orders o ON c.customer_id = o.customer_id\nWHERE o.status = 'completed' AND strftime('%Y', o.order_date) = '2024'\nGROUP BY c.customer_id, c.name\nORDER BY total_spend DESC\nLIMIT 5;`;
         }
-        
-        // 3. HR & Salary Queries
-        if (qLower.includes("engineering") || qLower.includes("salary")) {
-            return `SELECT e.emp_id, e.first_name || ' ' || e.last_name AS full_name, d.dept_name AS department, e.salary, e.hire_date\nFROM employees e\nJOIN departments d ON e.dept_id = d.dept_id\nWHERE d.dept_name = 'Engineering' AND e.salary > 80000\nORDER BY e.hire_date ASC;`;
-        }
 
-        // 4. SaaS MRR Queries
+        // SaaS MRR Queries
         if (qLower.includes("mrr") || qLower.includes("recurring")) {
             return `SELECT plan_tier, COUNT(sub_id) AS active_subscriptions, SUM(mrr_amount) AS total_mrr\nFROM subscriptions\nWHERE status = 'active'\nGROUP BY plan_tier\nORDER BY total_mrr DESC;`;
         }
 
-        // 5. Default Clean Fallback
-        return `SELECT customer_id, name\nFROM customers\nWHERE account_status = 'active'\nLIMIT 10;`;
+        // Default Dynamic Fallback
+        return `SELECT * FROM ${tblName}\nORDER BY 1 DESC\nLIMIT ${limitVal};`;
     }
 
     // Render Results
